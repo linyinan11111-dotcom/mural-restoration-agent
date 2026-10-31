@@ -115,6 +115,7 @@ ui/                         发货前端（index.html / app.js / styles.css）
 models/                     权重（不提交 Git）
 data/                       原图、冻结掩膜、候选和任务数据库
 assets/app.ico              应用图标
+图片/                       8 张已注明许可的单幅壁画照片（可直接打开；附来源与清单）
 tests/                      业务、API、规划器、旧版画布与发货壳回归测试
 scripts/                    下载、验收、研究实验与便携构建脚本
 artifacts/                  本机生成的验收报告与预览（不提交 Git）
