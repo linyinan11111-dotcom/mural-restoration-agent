@@ -339,6 +339,24 @@ class Bridge(QObject):
             return proposal
         return self._result(action)
 
+    @Slot(str, result=str)
+    def autoRestore(self, image_id):
+        def action():
+            image = self.store.get('image', image_id)
+            if not image:
+                raise ValueError('图像记录不存在。')
+            if not (self.settings.vision_model / 'provenance.json').exists():
+                raise ValueError('AI 一键恢复需要本地 Qwen3-VL 权重，请先安装模型。')
+            self.current_image_id = image_id
+            from .auto_restore import auto_restore
+            result = auto_restore(self.store, self.engine, image)
+            mask = dict(result['mask'])
+            mask['file_url'] = self._file_url(self.store.folder(mask['id']) / 'mask.png')
+            return {'auto': {'mask': mask, 'job': self._job(result['job']),
+                             'items': result['items'], 'steps': result['steps'],
+                             'backend': result['backend'], 'summary': result['summary']}}
+        return self._result(lambda: self._aux(action, 'AI 自主识别缺损并生成修复候选…'))
+
     @Slot(str, str, result=str)
     def mergeProposal(self, proposal_id, current_mask):
         def action():

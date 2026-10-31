@@ -12,7 +12,7 @@ from .quality import assess
 from .models import LamaBackend
 from .segmentation import SamSegmenter
 from .tools import ToolRegistry
-from .planner import rule_plan, api_plan, Plan, Step, Budget, Region
+from .planner import rule_plan, auto_plan, api_plan, Plan, Step, Budget, Region
 from .storage import Store, timestamp, new_id
 from .local_planner import local_plan
 
@@ -78,7 +78,10 @@ class Engine:
 
     def make_plan(self, job, original, mask):
         fraction = float((mask > 0).mean())
-        plan = rule_plan(job['backend'], job['candidate_count'], fraction)
+        if job.get('planner') == 'auto':
+            plan = auto_plan(job, fraction)
+        else:
+            plan = rule_plan(job['backend'], job['candidate_count'], fraction)
         if job['planner'] in {'api', 'local'}:
             overlay = original.copy()
             active = mask > 0

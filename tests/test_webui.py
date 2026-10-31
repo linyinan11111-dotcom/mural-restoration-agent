@@ -93,7 +93,7 @@ def test_shipped_shell_loads_and_exposes_bridge(window, qt_app):
     assert snapshot['models']['lama'] is False
     assert snapshot['aux_version'] >= 0
     assert run_js(window, "document.title || ''") != ''
-    assert run_js(window, "Boolean(document.querySelector('#damage-list') && document.querySelector('#reference-modal') && document.querySelector('#verify-modal'))") is True
+    assert run_js(window, "Boolean(document.querySelector('#damage-list') && document.querySelector('#reference-modal') && document.querySelector('#verify-modal') && document.querySelector('#auto-button'))") is True
     # QtWebEngine has no default prompt implementation; the reference workflow must
     # not depend on window.prompt.
     assert 'window.prompt' not in (ROOT / 'ui' / 'app.js').read_text(encoding='utf-8')
@@ -178,6 +178,97 @@ def test_bridge_job_flow_produces_verified_archive(window, qt_app):
         manifest = json.loads(zipped.read('manifest.json'))
         assert manifest['selected_candidate']['id'] == selected['id']
         assert manifest['job']['review']['note'] == 'shipped shell regression'
+
+
+def test_auto_restore_creates_a_traceable_autonomous_job(window, qt_app, monkeypatch):
+    import mural_agent.auto_restore as auto_module
+
+    def fake_assess(engine, image_record):
+        return {'items': [{'index': 1, 'type': 'paint_loss', 'bbox': [400, 300, 560, 380],
+                           'size': 'medium', 'confidence': 0.9, 'evidence': 'fake assessment'}],
+                'limitations': 'fake limitations'}
+
+    def fake_refine(engine, image, item):
+        mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        height, width = mask.shape
+        x0, y0, x1, y1 = item['bbox']
+        mask[round(y0 * height / 1000):round(y1 * height / 1000),
+             round(x0 * width / 1000):round(x1 * width / 1000)] = 255
+        return mask, {'method': 'fake_refine'}
+
+    monkeypatch.setattr(auto_module, 'assess_image', fake_assess)
+    monkeypatch.setattr(auto_module, 'refine_item', fake_refine)
+    # The bridge only checks that a local VLM is installed; the actual inference
+    # is monkeypatched above, so a fake provenance marker keeps this test hermetic.
+    vision = window.store.root / 'fake-vision'
+    vision.mkdir(exist_ok=True)
+    (vision / 'provenance.json').write_text('{}', encoding='utf-8')
+    window.bridge.settings.vision_model = vision
+
+    demo = json.loads(window.bridge.loadDemo())
+    started = json.loads(window.bridge.autoRestore(demo['id']))
+    assert started['status'] == 'running'
+
+    assert wait_until(qt_app, lambda: json.loads(window.bridge.snapshot())['aux'].get('status') in {'done', 'error'}, 30)
+    aux = json.loads(window.bridge.snapshot())['aux']
+    assert aux['status'] == 'done', aux
+    auto = aux['result']['auto']
+    assert auto['mask']['fraction'] > 0
+    assert auto['job']['planner'] == 'auto'
+    assert auto['steps']
+
+    job_id = auto['job']['id']
+
+    def finished():
+        jobs = json.loads(window.bridge.snapshot())['jobs']
+        return next(entry for entry in jobs if entry['id'] == job_id)['status'] not in ACTIVE
+
+    assert wait_until(qt_app, finished, 30)
+    job = next(entry for entry in json.loads(window.bridge.snapshot())['jobs'] if entry['id'] == job_id)
+    assert job['status'] == 'review', job
+    assert job['auto']['mask_fraction'] > 0
+    assert job['auto']['steps'][0]['tool'] in {'telea', 'ns', 'lama', 'color'}
+    assert job['candidates'], 'autonomous job must produce at least one candidate'
+    assert job['candidates'][0]['metrics']['outside_unchanged']
+
+
+def test_auto_restore_button_drives_the_frontend_to_results(window, qt_app, monkeypatch):
+    import mural_agent.auto_restore as auto_module
+
+    monkeypatch.setattr(auto_module, 'assess_image', lambda engine, record: {
+        'items': [{'index': 1, 'type': 'paint_loss', 'bbox': [400, 300, 560, 380],
+                   'size': 'medium', 'confidence': 0.9, 'evidence': 'fake'}],
+        'limitations': 'fake'})
+
+    def fake_refine(engine, image, item):
+        mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        height, width = mask.shape
+        mask[round(300 * height / 1000):round(380 * height / 1000),
+             round(400 * width / 1000):round(560 * width / 1000)] = 255
+        return mask, {'method': 'fake'}
+
+    monkeypatch.setattr(auto_module, 'refine_item', fake_refine)
+    vision = window.store.root / 'fake-vision'
+    vision.mkdir(exist_ok=True)
+    (vision / 'provenance.json').write_text('{}', encoding='utf-8')
+    window.bridge.settings.vision_model = vision
+
+    assert run_js(window, "document.querySelector('[data-action=\"load-demo\"]').click(); true") is True
+    assert wait_until(qt_app, lambda: run_js(window, 'Boolean(window.__shibui.state.image)') is True, 30)
+    assert wait_until(qt_app, lambda: run_js(window, "!document.querySelector('[data-action=\"auto-restore\"]').disabled") is True, 15)
+    assert run_js(window, "document.querySelector('[data-action=\"auto-restore\"]').click(); true") is True
+    assert wait_until(qt_app, lambda: json.loads(window.bridge.snapshot())['aux'].get('status') in {'done', 'error'}, 30)
+    aux = json.loads(window.bridge.snapshot())['aux']
+    assert aux['status'] == 'done', aux
+    assert wait_until(qt_app, lambda: run_js(window, "document.querySelector('#results-view').classList.contains('active')") is True, 30)
+    job_id = aux['result']['auto']['job']['id']
+
+    def job_done():
+        jobs = json.loads(window.bridge.snapshot())['jobs']
+        return next(entry for entry in jobs if entry['id'] == job_id)['status'] not in ACTIVE
+
+    assert wait_until(qt_app, job_done, 30)
+    assert wait_until(qt_app, lambda: run_js(window, "document.querySelectorAll('.candidate-card').length") >= 1, 20)
 
 
 def test_damage_panel_renders_candidates_and_recommendation(window, qt_app):

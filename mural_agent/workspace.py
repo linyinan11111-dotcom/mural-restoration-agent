@@ -42,7 +42,7 @@ def add_mask(store, image_record, payload, proposal_ids=None):
 
 def create_job(store, engine, image_record, mask_record, backend, planner, count, instructions,
                mode='conservative', registration_id=None, budget=None, structure_control=False,
-               quality_thresholds=None):
+               quality_thresholds=None, auto=None):
     from .planner import Budget
     from .imaging import mask_array
     available = engine.tools.availability()
@@ -54,7 +54,9 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
         raise ValueError('本地视觉模型权重尚未安装。')
     if mask_record['image_id'] != image_record['id']:
         raise ValueError('掩膜不属于当前图像。')
-    if backend not in {'opencv', 'telea', 'ns', 'lama', 'reference', 'diffusion', 'denoise', 'color', 'deblur', 'research'} or planner not in {'api', 'rules', 'local'} or not 1 <= count <= 3:
+    if planner == 'auto' and not (isinstance(auto, dict) and auto.get('steps')):
+        raise ValueError('AI 自动任务缺少规划信息。')
+    if backend not in {'opencv', 'telea', 'ns', 'lama', 'reference', 'diffusion', 'denoise', 'color', 'deblur', 'research'} or planner not in {'api', 'rules', 'local', 'auto'} or not 1 <= count <= 3:
         raise ValueError('不支持的修复配置。')
     if not available.get(backend):
         raise ValueError('所选工具尚未配置，请在模型与环境中查看安装状态。')
@@ -89,7 +91,7 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
            'cancel_requested': False, 'mode': mode, 'registration_id': registration_id,
            'budget': limits, 'structure_control': structure_control, 'attempts': [], 'revisions': [],
            'elapsed_seconds': 0, 'quality_thresholds': quality_thresholds or {},
-           'proposal_ids': mask_record.get('proposal_ids', [])}
+           'proposal_ids': mask_record.get('proposal_ids', []), 'auto': auto}
     store.put('job', job)
     engine.submit(identifier)
     return job

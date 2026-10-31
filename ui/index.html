@@ -71,6 +71,8 @@
               <label class="check-row"><input id="controlnet" type="checkbox" disabled><span>推测模式使用结构控制</span></label>
               <div class="budget-row"><label>修订轮数 <input id="revisions" type="number" min="0" max="2" value="2"></label><label>时间上限 <input id="timeout" type="number" min="10" max="3600" value="300"></label></div>
               <button class="button primary run-button" data-action="run-repair" disabled>生成修复候选 <span>↗</span></button>
+              <button class="button" data-action="auto-restore" id="auto-button" disabled>AI 一键恢复 · 自动识别与选法</button>
+              <small id="auto-status" class="field-note">由本地 Qwen 自动识别缺损、生成掩膜并规划保守修复；结果仍需人工复核。</small>
               <button class="button cancel-button hidden" data-action="cancel-job">取消当前任务</button>
               <button class="button hidden" data-action="resume-job" id="resume-button">从检查点续跑</button>
             </div>

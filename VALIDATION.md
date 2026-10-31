@@ -4,7 +4,7 @@
 
 ## 当前实测基线
 
-- **测试**：`pytest -q` → **32 passed**（约 9 秒）。覆盖业务/API/规划器、旧版 Qt Widgets 画布回归，以及**发货 WebEngine 外壳**：页面加载、QWebChannel 快照、灰度掩膜往返（防整图选中）、桥接建任务→复核→导出 ZIP、`mergeProposal`、`aux_version` 契约、AI 缺损面板渲染。可复现命令：`.\.venv\Scripts\python.exe -m pytest -q`。
+- **测试**：`pytest -q` → **39 passed**（约 12 秒）。覆盖业务/API/规划器、旧版 Qt Widgets 画布回归，以及**发货 WebEngine 外壳**：页面加载、QWebChannel 快照、灰度掩膜往返（防整图选中）、桥接建任务→复核→导出 ZIP、`mergeProposal`、`aux_version` 契约、AI 缺损面板渲染、一键 AI 自主恢复（桥接层与前端点击两条路径）。可复现命令：`.\.venv\Scripts\python.exe -m pytest -q`。
 - **发货壳验收**：`scripts/verify_desktop.py` 在隔离离屏窗口中加载 `ui/index.html`，通过桥接完成真实 LaMa CUDA 修复。本次结果：页面加载成功、job=review、候选 `tool=lama`、`device=cuda`、耗时 3.65 s、`outside_max_difference=0`、候选 2 个。报告：`artifacts/desktop-web-verification.json`；档案：`artifacts/verified-web-restoration.zip`；预览：`artifacts/desktop-web-preview.png`。
 - **环境**：Python 3.13.12；PyTorch 2.11.0+cu128，`cuda_available=True`；GPU RTX 5070 Ti Laptop 11.94 GiB；PySide6 6.12、OpenCV 4.14、Transformers 4.57.6、Diffusers 0.36.0、LPIPS 可导入；`pip check` 无冲突。
 - **权重**：`models/` 5 组权重共 8.34 GB；`big-lama.pt` 实测 SHA-256 与 README 记录一致；SAM2/Qwen3-VL/SD Inpainting/ControlNet 的 `provenance.json` 含固定 revision、许可与逐文件 SHA-256；LPIPS 账本只有 SHA-256/许可，`big-lama` 无 provenance（README 记录 hash）。
@@ -18,6 +18,7 @@
 
 ## 已实现但尚未完成真实模型验收
 
+- **一键 AI 自主恢复**（`auto_restore.py`）：本地 Qwen 识别 → 逐项细化掩膜（裂缝走黑帽提取，其他走 SAM 框提示，SAM 不可用回退矩形框）→ 合并掩膜（上限图像 25%、最多 5 处）→ 按类别/尺寸选保守工具 → 自动建任务并生成候选。已有单元测试（筛选/路由/步骤/掩膜上限）与桥接集成测试（伪造识别结果，验证掩膜、`planner=auto`、任务与候选）。**真实模型冒烟已跑通**：合成纹样练习图识别 3 处裂缝，自动掩膜占 1.51%，LaMa CUDA 候选，掩膜外差异 0，总耗时约 50.5 秒（含 Qwen 加载）。真实壁画的漏检/误检率、工具选择合理性仍未评估。
 - **Qwen3-VL 缺损识别与本地规划**：已接入发货 UI（“工具/评测”页），子进程隔离、JSON 容错解析与去重/合并逻辑已有单元测试。**真实推理已跑通一次**：在合成纹样练习图上经桥接调用 Qwen3-VL 2B，含模型加载约 41 秒，返回 8 条原始候选（模型重复同一裂缝多次），经去重/合并后得到 3 条候选并成功生成红框预览（`artifacts/damage-smoke/`）。它不是真实壁画，漏检/误检率与建议质量仍未评估。
 - **Stable Diffusion / ControlNet**：ControlNet 加载缺 fp16 变体的问题已修并可在本地实例化，但尚未实际生成候选；SD 仍为整图 512px 推理，未实现 ROI。
 - **参考检索与跨图配准**：SIFT/RANSAC 与人工核验门禁有测试，真实跨图重建质量未验证。

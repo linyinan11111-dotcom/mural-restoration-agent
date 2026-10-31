@@ -124,6 +124,8 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 .budget-row label { color: #737b84; font-size: 9px; }
 .budget-row input { display: block; margin-top: 4px; padding: 5px 6px !important; }
 .run-button { width: 100%; margin-top: 11px; height: 34px; justify-content: space-between; padding: 0 11px; }
+#auto-button { width: 100%; margin-top: 7px; justify-content: flex-start; }
+#auto-status { margin-top: 5px; line-height: 1.45; }
 .cancel-button { margin-top: 6px; width: 100%; }
 .execution-section { min-height: 170px; flex: 1; display: flex; flex-direction: column; padding: 12px 14px; }
 .execution-section .section-title { margin-bottom: 9px; }

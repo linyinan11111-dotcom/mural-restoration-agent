@@ -48,6 +48,22 @@ class Plan(BaseModel):
     checks: list[str] = Field(default_factory=lambda: ['outside_unchanged', 'boundary_continuity', 'human_review'], max_length=20)
 
 
+def auto_plan(job, fraction):
+    """Plan produced by the one-click autonomous pipeline (already routed by the VLM)."""
+    spec = job.get('auto') or {}
+    raw_steps = spec.get('steps') or [{'tool': 'telea', 'reason': 'AI 自主规划：回退保守修补。'}]
+    steps = [Step(tool=step['tool'], radius=max(1, min(9, int(step.get('radius', 3)))),
+                  reason=str(step.get('reason') or 'AI 自主规划')[:1000]) for step in raw_steps[:3]]
+    if not steps:
+        steps = [Step(tool='telea', reason='AI 自主规划：回退保守修补。')]
+    return Plan(summary=str(spec.get('summary') or 'AI 自主规划：按识别结果选择保守修补工具。')[:2000],
+                observations=[f'AI 自动掩膜占图像 {fraction:.2%}。',
+                              '所有候选均从原始工作图生成，只合成到自动生成的掩膜内。'],
+                steps=steps,
+                uncertainty='AI 识别、掩膜与工具选择都是候选，需人工复核；不代表历史原貌。',
+                source='ai_auto')
+
+
 def rule_plan(backend, count, fraction):
     if backend in {'telea', 'ns'}:
         steps = [Step(tool=backend, radius=min(9, 3+i), reason='按缺损类别使用指定的传统局部修补算法。')

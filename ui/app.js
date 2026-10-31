@@ -5,7 +5,7 @@
   const state = { bridge: null, image: null, job: null, candidate: null, keepEmpty: false, maskStrokes: [], currentStroke: null,
     baseMask: null, maskDirty: false, tool: 'brush', brushSize: 28, zoom: 1, promptPoints: [], promptLabels: [], promptBox: null,
     proposal: null, references: [], selectedReference: null, registration: null, lastSnapshot: null, toastTimer: null,
-    auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false };
+    auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false };
   const canvas = $('#mask-canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const image = $('#source-image');
@@ -38,6 +38,8 @@
     return false;
   };
   const notifyError = (error) => toast(error?.message || String(error));
+  const AUTO_HINT = '由本地 Qwen 自动识别缺损、生成掩膜并规划保守修复；结果仍需人工复核。';
+  const setAutoStatus = (text) => { $('#auto-status').textContent = text || AUTO_HINT; };
   const fileUrl = (value) => value || '';
 
   function showPage(page) {
@@ -133,6 +135,7 @@
       $('[data-action="select-candidate"]').disabled = true;
       $('[data-action="export-archive"]').disabled = true;
       renderDamage();
+      state.autoBusy = false; setAutoStatus(AUTO_HINT);
       $('#candidate-strip').innerHTML = '<div class="empty-inline">修复候选会显示在这里</div>';
       $('#comparison-stage').innerHTML = '<div class="empty-inline">选择候选查看结果</div>';
       $('#event-log').innerHTML = '<div class="empty-log">完成掩膜后生成候选。</div>';
@@ -147,6 +150,7 @@
     $('#image-name').textContent = record.name;
     $('#image-meta').textContent = `${record.width} × ${record.height} · 原始文件已归档`;
     $('#empty-state').classList.add('hidden'); imageWrap.classList.remove('hidden');
+    state.autoBusy = false; setAutoStatus(AUTO_HINT);
     renderDamage();
     $('#candidate-strip').innerHTML = '<div class="empty-inline">修复候选会显示在这里</div>';
     $('#comparison-stage').innerHTML = '<div class="empty-inline">选择候选查看结果</div>';
@@ -230,7 +234,7 @@
   }
 
   async function openImage() {
-    if (state.running) return toast('任务运行中，完成或取消后再打开新图像。');
+    if (state.running || state.autoBusy) return toast('任务或 AI 分析进行中，完成后再打开新图像。');
     try { const record = await invoke('openImage'); if (record?.id) await loadImage(record); }
     catch (error) { notifyError(error); }
   }
@@ -272,6 +276,7 @@
       if (state.job) state.job = snapshot.jobs.find(item => item.id === state.job.id) || state.job;
       else if (!state.keepEmpty && snapshot.jobs?.length) state.job = snapshot.jobs.find(item => item.image_id === state.image?.id) || null;
       setBusy(Boolean(activeJob));
+      $('[data-action="auto-restore"]').disabled = Boolean(activeJob) || state.autoBusy || !state.image;
       renderJob(state.job);
       renderHistory(snapshot.jobs || []);
       if (snapshot.aux_version !== state.auxVersion) {
@@ -371,7 +376,7 @@
       return `<button class="history-item" data-job="${job.id}" ${state.running ? 'disabled' : ''}><span><span class="history-name">${escapeHtml(img?.name || '壁画任务')}</span><span class="history-detail">${(job.created_at || '').slice(0, 16).replace('T', ' ')} · ${(job.candidates || []).length} 个候选</span></span><span class="history-state">${escapeHtml(status)}</span></button>`;
     }).join('') || '<div class="empty-inline">暂无修复记录</div>';
     $$('.history-item').forEach(item => item.addEventListener('click', async () => {
-      if (state.running) { toast('任务运行中，完成或取消后再打开历史任务。'); return; }
+      if (state.running || state.autoBusy) { toast('任务或 AI 分析进行中，完成后再打开历史任务。'); return; }
       try {
         const job = items.find(record => record.id === item.dataset.job);
         const record = images.find(imageRecord => imageRecord.id === job.image_id);
@@ -379,27 +384,51 @@
         state.job = job; state.candidate = null;
         installMask(job.mask_file_url);
         $('#repair-mode').value = job.mode || 'conservative'; $('#repair-backend').value = job.backend;
-        $('#planner').value = job.planner; $('#instructions').value = job.instructions || '';
+        $('#planner').value = ['rules', 'local', 'api'].includes(job.planner) ? job.planner : 'rules';
+        $('#instructions').value = job.instructions || '';
         $('#review-note').value = job.review?.note || '';
+        state.autoBusy = false;
+        setAutoStatus(job.auto?.summary || AUTO_HINT);
         showPage('workbench'); showView(job.candidates?.length ? 'results' : 'edit'); await refresh();
       } catch (error) { notifyError(error); }
     }));
   }
 
-  function renderAux(aux) {
+  async function renderAux(aux) {
     if (!aux || aux.status === 'idle') return;
     if (aux.status === 'running') {
       $('#sam-status').textContent = aux.label || '处理中';
       if (/缺损/.test(aux.label || '')) $('#damage-status').textContent = '识别中';
+      if ((aux.label || '').includes('AI 自主')) setAutoStatus(aux.label);
       return;
     }
     if (aux.status === 'error') {
       $('#sam-status').textContent = '出错';
       $('#proposal-note').textContent = aux.error || '工具执行失败。';
+      if (state.autoBusy) {
+        state.autoBusy = false;
+        setAutoStatus('AI 一键恢复失败：' + (aux.error || '未知错误'));
+      }
       toast(aux.error || '辅助工具执行失败。');
       return;
     }
     const result = aux.result || {};
+    if (result.auto) {
+      state.autoBusy = false;
+      const auto = result.auto;
+      state.job = auto.job;
+      state.proposalIds = (auto.mask && auto.mask.proposal_ids) || [];
+      if (auto.mask?.file_url) installMask(auto.mask.file_url);
+      setAutoStatus(auto.summary || 'AI 自主任务已生成候选，请人工复核。');
+      $('#repair-mode').value = 'conservative';
+      if (auto.backend) $('#repair-backend').value = auto.backend;
+      $('#planner').value = 'rules';
+      if (!$('#review-note').value) $('#review-note').value = 'AI 自主生成，未经人工复核';
+      showPage('workbench'); showView('results');
+      toast('AI 一键恢复已生成候选，请人工复核。');
+      await refresh();
+      return;
+    }
     if (result.items) {
       state.damageItems = result.items;
       state.selectedDamage = null;
@@ -526,10 +555,10 @@
     try {
       switch (action) {
         case 'new-task':
-          if (state.running) return toast('任务运行中，完成或取消后再新建任务。');
+          if (state.running || state.autoBusy) return toast('任务或 AI 分析进行中，完成后再新建任务。');
           await loadImage(null); state.image = null; $('#empty-state').classList.remove('hidden'); imageWrap.classList.add('hidden'); break;
         case 'open-image': await openImage(); break;
-        case 'load-demo': { if (state.running) return toast('任务运行中，完成或取消后再载入图像。'); const record = await invoke('loadDemo'); await loadImage(record); break; }
+        case 'load-demo': { if (state.running || state.autoBusy) return toast('任务或 AI 分析进行中，完成后再载入图像。'); const record = await invoke('loadDemo'); await loadImage(record); break; }
         case 'undo': if (state.maskStrokes.length) { state.maskStrokes.pop(); redrawMask(); } break;
         case 'clear-mask': state.maskStrokes = []; state.currentStroke = null; state.baseMask = null; redrawMask(); break;
         case 'import-mask': { const result = await invoke('importMask'); if (result?.mask_data) showMaskFromBase64(result.mask_data); break; }
@@ -537,6 +566,23 @@
         case 'zoom-out': state.zoom = Math.max(.5, state.zoom / 1.15); updateCanvasSize(); break;
         case 'zoom-fit': state.zoom = 1; updateCanvasSize(); break;
         case 'run-repair': await createJob(); break;
+        case 'auto-restore': {
+          if (!state.image) return toast('请先打开一幅壁画。');
+          if (state.running || state.autoBusy) return toast('已有任务或 AI 分析在执行，请稍候。');
+          state.autoBusy = true;
+          $('[data-action="auto-restore"]').disabled = true;
+          setAutoStatus('AI 正在识别缺损、生成掩膜并规划修复…');
+          try {
+            await invoke('autoRestore', state.image.id);
+            toast('AI 自主分析已开始，完成后会自动生成候选。');
+          } catch (error) {
+            state.autoBusy = false;
+            setAutoStatus('AI 一键恢复失败：' + (error.message || error));
+            notifyError(error);
+            await refresh();
+          }
+          break;
+        }
         case 'cancel-job': { const identifier = state.activeJobId || state.job?.id; if (identifier) { await invoke('cancelJob', identifier); } await refresh(); break; }
         case 'resume-job': if (state.job) await invoke('resumeJob', state.job.id); await refresh(); break;
         case 'select-candidate': if (state.job && state.candidate) { state.job = await invoke('selectCandidate', state.job.id, state.candidate.id, $('#review-note').value); toast('候选选择已保存。'); renderComparison(); await refresh(); } break;
