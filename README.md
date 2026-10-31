@@ -135,7 +135,7 @@ ZIP 档案包含原始文件字节、工作图、mask、选中结果、差异图
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest -q            # 31 项，约 8 秒
+.\.venv\Scripts\python.exe -m pytest -q            # 32 项，约 9 秒
 .\.venv\Scripts\python.exe -m pytest -m "not web"  # 无 QtWebEngine 的机器
 .\.venv\Scripts\python.exe scripts/verify_desktop.py
 .\.venv\Scripts\python.exe scripts/build_launcher.py

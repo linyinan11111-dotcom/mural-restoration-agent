@@ -43,6 +43,11 @@ button:disabled { opacity: .45; cursor: default; }
 .icon-tools::after { content: ""; position: absolute; inset: 6px; background: currentColor; border-radius: 50%; }
 .icon-history::before { content: ""; position: absolute; inset: 2px; border: 1.5px solid currentColor; border-radius: 50%; }
 .icon-history::after { content: ""; position: absolute; left: 7px; top: 4px; height: 5px; width: 4px; border-left: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; }
+/* The topbar gear has no .nav-icon wrapper, so without position:relative its
+   absolutely positioned pseudo-elements resolved against the viewport: they
+   painted a giant arc and made the settings button intercept clicks across the
+   right half of the window. */
+.icon-settings { position: relative; display: inline-block; width: 16px; height: 16px; }
 .icon-settings::before { content: ""; position: absolute; inset: 2px; border: 1.5px solid currentColor; border-radius: 50%; }
 .icon-settings::after { content: ""; position: absolute; left: 6px; top: 6px; width: 4px; height: 4px; border: 1px solid currentColor; border-radius: 50%; }
 .sidebar-bottom { margin-top: auto; display: grid; gap: 7px; }

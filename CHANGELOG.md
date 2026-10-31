@@ -12,6 +12,7 @@
 - **新建任务后旧候选卡残留**：创建任务/换图时清空候选条与对照区。
 - **任务运行中仍可换图/恢复历史**：运行期禁用打开图像、载入练习图与历史任务，取消按钮改为基于全局活动任务。
 - **关闭任务窗口无法可靠退出**：取消中会提示；再次点击关闭可强制退出（已完成尝试均已落库，重启后可续跑）。
+- **顶栏设置按钮的命中区域覆盖整个右半屏**：`.icon-settings` 没有定位父级（顶栏没有 `.nav-icon` 包装），其 `position:absolute` 的伪元素按视口尺寸绘制出一个巨大的透明圆环——用户点击右半屏任意位置都会命中“API 设置”按钮并弹出设置窗口，验收截图里那条跨越画布的细弧线也是它。给 `.icon-settings` 补 `position:relative; width/height`，并新增基于 `elementFromPoint` 的回归测试。
 - **复核意见被空输入覆盖**：`selectCandidate` 在输入为空时保留已有复核意见。
 - **删除 Ctrl+O 失效**：补回 `Ctrl+O` 打开图像；README 中“滚动条平移”的不实描述已修正。
 - **AI 缺损识别只接在旧 Qt Widgets 页**：已移植到发货 WebEngine 前端（“工具/评测”页：分析原图缺损 → 选中条目 → 细化选中区域），旧页面与发货页面共用 `damage_assessment.recommendation_for` 的修复建议映射。
@@ -28,7 +29,7 @@
 - 新增 `tests/test_webui.py`：4 项发货壳回归（页面加载与桥接快照、灰度掩膜往返、桥接建任务→复核→ZIP 导出、`mergeProposal` 与 `aux_version` 契约）。
 - 新增 `tests/test_damage_assessment.py`：缺损解析（完整/截断/非法候选）、相邻合并、重复框去重、并行重叠裂缝不误并、修复建议路由。
 - `tests/conftest.py` 统一离屏 Qt 设置；`test_desktop.py` 隔离全部模型路径并断言旧界面默认规划器为 `rules`（此前会因本机装有 Qwen3-VL 权重而卡在 planning 超时）。
-- 当前 `pytest -q`：**31 passed**（约 8 秒）。
+- 当前 `pytest -q`：**32 passed**（约 9 秒）。
 - 真实 Qwen3-VL 缺损识别经桥接冒烟通过：合成纹样练习图，含模型加载约 41 秒，8 条原始候选去重/合并后剩 3 条并生成红框预览（`artifacts/damage-smoke/`）。测试同时暴露并修复了 VLM 重复候选与并行裂缝被误合并的问题。
 
 ### 验收

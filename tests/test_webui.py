@@ -99,6 +99,33 @@ def test_shipped_shell_loads_and_exposes_bridge(window, qt_app):
     assert 'window.prompt' not in (ROOT / 'ui' / 'app.js').read_text(encoding='utf-8')
 
 
+def test_settings_button_hit_area_does_not_cover_the_page(window, qt_app):
+    """A viewport-sized pseudo-element on the topbar gear intercepted clicks and
+    opened the API settings dialog from anywhere on the right half of the window."""
+    probe = """(() => {
+      const points = [[innerWidth - 120, 300], [innerWidth - 60, innerHeight - 200],
+                      [innerWidth / 2, 120], [innerWidth - 30, 60]];
+      return JSON.stringify(points.map(([x, y]) => {
+        const element = document.elementFromPoint(x, y);
+        if (!element) return 'none';
+        if (element.closest('[data-action="open-settings"]')) return 'settings';
+        return (element.id || element.className || element.tagName).toString();
+      }));
+    })()"""
+    targets = json.loads(run_js(window, probe))
+    assert 'settings' not in targets, targets
+    click_far_right = """(() => {
+      const element = document.elementFromPoint(innerWidth - 100, innerHeight - 300);
+      if (element) element.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+      return document.querySelector('#settings-modal').classList.contains('hidden');
+    })()"""
+    assert run_js(window, click_far_right) is True
+    # The real button must still open the dialog.
+    assert run_js(window, "document.querySelector('.topbar [data-action=\"open-settings\"]').click(); true") is True
+    assert run_js(window, "document.querySelector('#settings-modal').classList.contains('hidden')") is False
+    run_js(window, "document.querySelector('#settings-modal').querySelector('[data-action=\"close-settings\"]').click(); true")
+
+
 def test_grayscale_mask_round_trip_keeps_only_white_pixels(window, qt_app):
     mask = np.zeros((48, 64), dtype=np.uint8)
     mask[16:32, 24:40] = 255

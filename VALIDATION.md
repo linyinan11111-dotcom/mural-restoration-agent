@@ -4,7 +4,7 @@
 
 ## 当前实测基线
 
-- **测试**：`pytest -q` → **31 passed**（约 8 秒）。覆盖业务/API/规划器、旧版 Qt Widgets 画布回归，以及**发货 WebEngine 外壳**：页面加载、QWebChannel 快照、灰度掩膜往返（防整图选中）、桥接建任务→复核→导出 ZIP、`mergeProposal`、`aux_version` 契约、AI 缺损面板渲染。可复现命令：`.\.venv\Scripts\python.exe -m pytest -q`。
+- **测试**：`pytest -q` → **32 passed**（约 9 秒）。覆盖业务/API/规划器、旧版 Qt Widgets 画布回归，以及**发货 WebEngine 外壳**：页面加载、QWebChannel 快照、灰度掩膜往返（防整图选中）、桥接建任务→复核→导出 ZIP、`mergeProposal`、`aux_version` 契约、AI 缺损面板渲染。可复现命令：`.\.venv\Scripts\python.exe -m pytest -q`。
 - **发货壳验收**：`scripts/verify_desktop.py` 在隔离离屏窗口中加载 `ui/index.html`，通过桥接完成真实 LaMa CUDA 修复。本次结果：页面加载成功、job=review、候选 `tool=lama`、`device=cuda`、耗时 3.65 s、`outside_max_difference=0`、候选 2 个。报告：`artifacts/desktop-web-verification.json`；档案：`artifacts/verified-web-restoration.zip`；预览：`artifacts/desktop-web-preview.png`。
 - **环境**：Python 3.13.12；PyTorch 2.11.0+cu128，`cuda_available=True`；GPU RTX 5070 Ti Laptop 11.94 GiB；PySide6 6.12、OpenCV 4.14、Transformers 4.57.6、Diffusers 0.36.0、LPIPS 可导入；`pip check` 无冲突。
 - **权重**：`models/` 5 组权重共 8.34 GB；`big-lama.pt` 实测 SHA-256 与 README 记录一致；SAM2/Qwen3-VL/SD Inpainting/ControlNet 的 `provenance.json` 含固定 revision、许可与逐文件 SHA-256；LPIPS 账本只有 SHA-256/许可，`big-lama` 无 provenance（README 记录 hash）。
