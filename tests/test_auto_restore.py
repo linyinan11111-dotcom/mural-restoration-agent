@@ -1,12 +1,14 @@
 """Unit tests for the one-click autonomous restoration routing helpers."""
 import numpy as np
 
+import pytest
+
 from mural_agent.auto_restore import (build_steps, choose_backend, merge_masks,
-                                      route_items, select_items)
+                                      route_items, select_items, validate_assessment)
 
 
 def item(kind, size='small', confidence=0.9, index=1):
-    return {'index': index, 'type': kind, 'size': size, 'confidence': confidence, 'bbox': [0, 0, 10, 10]}
+    return {'index': index, 'type': kind, 'size': size, 'confidence': confidence, 'bbox': [100, 100, 160, 700]}
 
 
 def test_select_items_filters_low_confidence_and_caps_count():
@@ -37,6 +39,19 @@ def test_build_steps_deduplicates_tools_and_caps_at_three():
     steps = build_steps(items, routes)
     assert [step['tool'] for step in steps] == ['ns', 'color', 'telea']
     assert all('AI 自主规划' in step['reason'] for step in steps)
+
+
+def test_select_items_rejects_noise_sized_boxes():
+    tiny = {'index': 1, 'type': 'paint_loss', 'size': 'small', 'confidence': 0.9, 'bbox': [0, 0, 10, 10]}
+    real = {'index': 2, 'type': 'crack', 'size': 'small', 'confidence': 0.9, 'bbox': [100, 100, 160, 700]}
+    selected = select_items([tiny, real])
+    assert [item['index'] for item in selected] == [2]
+
+
+def test_truncated_vlm_output_is_not_auto_submitted():
+    assert validate_assessment({'limitations': '完整输出'}) == '完整输出'
+    with pytest.raises(ValueError, match='截断'):
+        validate_assessment({'limitations': '模型输出被截断；仅保留已完整解析的候选，需人工检查。'})
 
 
 def test_merge_masks_respects_the_total_area_cap():

@@ -20,6 +20,8 @@ from . import workspace
 MAX_ITEMS = 5
 MAX_MASK_FRACTION = 0.25
 MIN_CONFIDENCE = 0.35
+MIN_BOX_FRACTION = 0.0005    # a 0.05% box is almost certainly noise/text, not damage
+MIN_MASK_FRACTION = 0.0005   # refuse to submit a repair that touches almost nothing
 STEP_LIMIT = 3
 LABELS = {'crack': '裂缝', 'paint_loss': '颜料层缺失', 'plaster_loss': '地仗/灰泥缺失',
           'flaking': '起甲/剥落', 'stain': '污渍/变色', 'other': '其他疑似缺损'}
@@ -27,11 +29,27 @@ LABELS = {'crack': '裂缝', 'paint_loss': '颜料层缺失', 'plaster_loss': '�
 TOOL_ORDER = {'lama': 0, 'telea': 1, 'ns': 2, 'color': 3, 'denoise': 4, 'deblur': 5}
 
 
+def box_fraction(item):
+    bbox = item.get('bbox') or []
+    if len(bbox) != 4:
+        return 0.0
+    return max(0, int(bbox[2]) - int(bbox[0])) * max(0, int(bbox[3]) - int(bbox[1])) / 1_000_000
+
+
 def select_items(items, min_confidence=MIN_CONFIDENCE, max_items=MAX_ITEMS):
-    """Keep the most confident candidates; the VLM may return duplicates already merged."""
-    selected = [item for item in items if float(item.get('confidence', 0)) >= min_confidence]
+    """Keep the most confident, plausibly sized candidates; duplicates are merged upstream."""
+    selected = [item for item in items
+                if float(item.get('confidence', 0)) >= min_confidence and box_fraction(item) >= MIN_BOX_FRACTION]
     selected.sort(key=lambda item: float(item.get('confidence', 0)), reverse=True)
     return selected[:max_items]
+
+
+def validate_assessment(assessment):
+    """Reject truncated VLM output instead of acting on half-parsed boxes."""
+    limitations = str(assessment.get('limitations', ''))
+    if '截断' in limitations or 'truncated' in limitations.lower():
+        raise ValueError('AI 输出被截断，未自动提交修复任务；请重试，或改用手动画选。')
+    return limitations
 
 
 def route_items(items, available):
@@ -145,6 +163,7 @@ def summary_for(items, routes, fraction, backend):
 def auto_restore(store, engine, image_record, min_confidence=MIN_CONFIDENCE, max_items=MAX_ITEMS):
     """Run the full autonomous proposal and create one bounded conservative job."""
     assessment = assess_image(engine, image_record)
+    limitations = validate_assessment(assessment)
     selected = select_items(assessment.get('items', []), min_confidence, max_items)
     if not selected:
         raise ValueError('AI 未发现可确认的缺损候选；请手动画选，或换一张更清晰的图。')
@@ -179,14 +198,16 @@ def auto_restore(store, engine, image_record, min_confidence=MIN_CONFIDENCE, max
                                'adopted': False, 'confirmed': False})
         proposal_ids.append(proposal_id)
 
-    mask_record = workspace.add_mask(store, image_record, png_bytes(union), proposal_ids)
     fraction = float((union > 0).mean())
+    if fraction < MIN_MASK_FRACTION:
+        raise ValueError('AI 候选掩膜过小（低于图像 0.05%），未自动提交；请改用手动画选。')
+    mask_record = workspace.add_mask(store, image_record, png_bytes(union), proposal_ids)
     summary = summary_for(accepted_items, accepted_routes, fraction, backend)
     job = workspace.create_job(store, engine, image_record, mask_record, backend, 'auto', len(steps),
         summary, mode='conservative', budget={'candidates': len(steps), 'revisions': 1, 'timeout_seconds': 300},
         auto={'items': accepted_items, 'routes': accepted_routes, 'steps': steps,
               'backend': backend, 'mask_fraction': fraction,
-              'limitations': str(assessment.get('limitations', ''))[:1000],
+              'limitations': limitations[:1000],
               'summary': summary})
     return {'mask': mask_record, 'job': job, 'items': accepted_items, 'routes': accepted_routes,
             'steps': steps, 'backend': backend, 'summary': summary}
