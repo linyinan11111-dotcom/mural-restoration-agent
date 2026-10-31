@@ -1,3 +1,9 @@
+"""Optional FastAPI adapter used only by development regression tests.
+
+The shipped application is a native Qt WebEngine window and never starts this
+HTTP service. It exists so the business rules can be exercised through a stable
+HTTP contract in tests; do not expose it on a network interface.
+"""
 from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path

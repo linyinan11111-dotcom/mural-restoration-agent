@@ -11,8 +11,43 @@ from PIL import Image
 TYPES = {"crack", "paint_loss", "plaster_loss", "flaking", "stain", "other"}
 SIZES = {"small", "medium", "large", "uncertain"}
 
+# Conservative routing suggestion, not a conservation decision. Mirrors the
+# small-crack study (Navier-Stokes best) and the paired study (LaMa better on
+# medium/large losses, Telea better on fine cracks).
+def recommendation_for(item):
+    kind = item.get("type", "other")
+    size = item.get("size", "uncertain")
+    if kind == "stain":
+        return {"backend": "color", "tool": "color", "method": "局部色调匹配"}
+    if kind == "crack":
+        if size == "large":
+            return {"backend": "lama", "tool": "lama", "method": "LaMa 候选；长裂缝需人工复核"}
+        return {"backend": "ns", "tool": "ns", "method": "Navier–Stokes 细线修补"}
+    if kind in {"paint_loss", "plaster_loss"} and size == "large":
+        return {"backend": "lama", "tool": "lama", "method": "LaMa 纹理补全"}
+    if kind in {"paint_loss", "plaster_loss", "flaking"}:
+        return {"backend": "telea", "tool": "telea", "method": "Telea 局部纹理传播"}
+    return {"backend": "opencv", "tool": "telea", "method": "先人工确认，再选择保守修补"}
+
+
+def _area(bbox):
+    return max(0, bbox[2] - bbox[0]) * max(0, bbox[3] - bbox[1])
+
+
+def _overlap(a, b):
+    width = min(a[2], b[2]) - max(a[0], b[0])
+    height = min(a[3], b[3]) - max(a[1], b[1])
+    return max(0, width) * max(0, height)
+
 
 def merge_adjacent_candidates(items, gap=10):
+    """Merge duplicate/near-duplicate boxes and join adjacent fragments.
+
+    A local VLM often repeats the same candidate several times and also reports
+    two parallel cracks that partially overlap. Identical/contained boxes are the
+    same region; adjacent fragments (disjoint, gap <= `gap` px) belong together;
+    partially overlapping but clearly different boxes stay separate.
+    """
     merged = []
     for source in items:
         if not isinstance(source, dict) or source.get("type") not in TYPES:
@@ -33,6 +68,14 @@ def merge_adjacent_candidates(items, gap=10):
             if existing["type"] != item["type"]:
                 continue
             a0, b0, a1, b1 = existing["bbox"]
+            overlap = _overlap(existing["bbox"], item["bbox"])
+            if overlap:
+                # Same region when one box mostly covers the other; otherwise keep
+                # separate (two parallel cracks can partially overlap).
+                if overlap / max(1, min(_area(existing["bbox"]), _area(item["bbox"]))) >= 0.6:
+                    found = existing
+                    break
+                continue
             dx = max(0, a0-x1, x0-a1)
             dy = max(0, b0-y1, y0-b1)
             if dx <= gap and dy <= gap:
@@ -61,7 +104,9 @@ def parse_model_output(text):
     try:
         data, _ = decoder.raw_decode(text[start:])
         if isinstance(data, dict):
-            data["items"] = merge_adjacent_candidates(data.get("items", [])[:8])
+            # Merge duplicates before capping: a VLM may repeat the same candidate
+            # several times and fill the eight slots with duplicates.
+            data["items"] = merge_adjacent_candidates(data.get("items", []))[:8]
             return data
     except json.JSONDecodeError:
         pass
@@ -87,7 +132,7 @@ def parse_model_output(text):
         offset += consumed
     if not items:
         raise ValueError("视觉模型输出被截断，未得到完整缺损候选。")
-    return {"items": merge_adjacent_candidates(items[:8]),
+    return {"items": merge_adjacent_candidates(items)[:8],
             "limitations": "模型输出被截断；仅保留已完整解析的候选，需人工检查。"}
 
 

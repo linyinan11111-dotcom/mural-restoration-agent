@@ -25,7 +25,8 @@ def execute(request):
     step = request['step']
     kwargs = dict(torch_dtype=dtype, local_files_only=True, use_safetensors=True, variant='fp16')
     if step.get('structure_control'):
-        control = ControlNetModel.from_pretrained(request['controlnet'], local_files_only=True, torch_dtype=dtype)
+        control = ControlNetModel.from_pretrained(request['controlnet'], local_files_only=True,
+                                                  torch_dtype=dtype, use_safetensors=True, variant='fp16')
         pipe = StableDiffusionControlNetInpaintPipeline.from_pretrained(request['model'], controlnet=control, **kwargs)
     else:
         pipe = StableDiffusionInpaintPipeline.from_pretrained(request['model'], **kwargs)
@@ -41,7 +42,15 @@ def execute(request):
     scale = min(1., 512/max(original_size))
     size = (max(8, round(image.width*scale)), max(8, round(image.height*scale)))
     image = image.resize(size, Image.Resampling.LANCZOS)
+    if scale < 1:
+        # Same reason as the LaMa path: a 1px crack would otherwise vanish during
+        # downscaling to 512px, so dilate before resizing and fail loudly if lost.
+        from PIL import ImageFilter
+        radius = max(1, min(15, int(round(1 / scale)) + 1))
+        mask = mask.filter(ImageFilter.MaxFilter(2 * radius + 1))
     mask = mask.resize(size, Image.Resampling.NEAREST)
+    if not mask.getbbox():
+        raise RuntimeError('掩膜在 512px 推放下丢失，请扩大圈选范围。')
     padded_size = (((size[0]+7)//8)*8, ((size[1]+7)//8)*8)
     canvas = Image.new('RGB', padded_size)
     canvas.paste(image, (0, 0))

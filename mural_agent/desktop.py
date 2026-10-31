@@ -1,4 +1,10 @@
-"""Native Qt Widgets desktop application. No WebView or local web server."""
+"""Legacy Qt Widgets reference UI (not the shipped shell).
+
+The shipped application is ``mural_agent.desktop_web`` (Qt WebEngine + ui/).
+This module is kept for its canvas/undo regression tests and for
+``configure_application`` (font/theme setup shared by both shells). It is not a
+product entry point: ``main()`` already delegates to the WebEngine shell.
+"""
 from pathlib import Path
 from datetime import datetime
 import json

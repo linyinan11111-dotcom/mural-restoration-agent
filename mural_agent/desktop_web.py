@@ -8,6 +8,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from PIL import Image
+
 from PySide6.QtCore import QObject, QLockFile, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QMainWindow
@@ -37,6 +39,7 @@ class Bridge(QObject):
         self.settings, self.store, self.engine = settings, store, engine
         self.aux = {'status': 'idle'}
         self.aux_future = None
+        self.aux_version = 0
         self.current_image_id = None
 
     def _result(self, function):
@@ -73,6 +76,14 @@ class Bridge(QObject):
         result['difference_url'] = self._file_url(folder / 'difference.png')
         return result
 
+    def _save_proposal(self, image_id, mask, metadata):
+        identifier = new_id()
+        folder = self.store.folder(identifier)
+        Image.fromarray(mask).save(folder / 'mask.png')
+        proposal = self.store.put('proposal', {'id': identifier, 'image_id': image_id, 'created_at': timestamp(),
+            'fraction': float((mask > 0).mean()), 'metadata': metadata, 'confirmed': False})
+        return {'proposal': proposal}
+
     def _snapshot(self):
         images = [self._image(item) for item in self.store.list('image')]
         if self.current_image_id is None and images:
@@ -81,7 +92,7 @@ class Bridge(QObject):
         jobs = [self._job(item) for item in self.store.list('job')]
         availability = self.engine.tools.availability()
         return {'images': images, 'jobs': jobs, 'models': {**availability, 'vision': (self.settings.vision_model / 'provenance.json').exists(),
-            'api_configured': self.settings.api_ready}, 'aux': self.aux,
+            'api_configured': self.settings.api_ready}, 'aux': self.aux, 'aux_version': self.aux_version,
             'api': {'kind': self.settings.api_kind, 'base_url': self.settings.api_base_url,
                     'model': self.settings.api_model, 'json_mode': self.settings.api_json_mode},
             'registration': self._registration(self.store.get('registration', self.aux.get('registration_id', '')))
@@ -99,6 +110,7 @@ class Bridge(QObject):
         if self.aux_future and not self.aux_future.done():
             raise ValueError('辅助工具仍在运行。')
         self.aux = {'status': 'running', 'label': label}
+        self.aux_version += 1
         self.aux_future = self.engine.executor.submit(function)
         return {'status': 'running'}
 
@@ -121,6 +133,7 @@ class Bridge(QObject):
                         item['file_url'] = self._file_url(self.store.folder(image['id']) / 'image.png')
             except Exception as exc:
                 self.aux = {'status': 'error', 'error': str(exc)[:500]}
+            self.aux_version += 1
             self.auxCompleted.emit()
 
     @Slot(result=str)
@@ -190,8 +203,10 @@ class Bridge(QObject):
                 raise ValueError('候选不属于当前任务。')
             if job['status'] in {'queued', 'planning', 'running', 'evaluating'}:
                 raise ValueError('任务完成前不能选定候选。')
+            # An empty box must not erase a note restored from the archive/archive history.
+            review_note = note.strip()[:2000] or (job.get('review') or {}).get('note', '')
             return self._job(self.store.update('job', job_id, selected_id=candidate_id,
-                review={'note': note[:2000], 'time': timestamp()}))
+                review={'note': review_note, 'time': timestamp()}))
         return self._result(action)
 
     @Slot(str, result=str)
@@ -224,31 +239,96 @@ class Bridge(QObject):
         return self._result(action)
 
     @Slot(str, result=str)
+    def setCurrentImage(self, image_id):
+        def action():
+            if not self.store.get('image', image_id):
+                raise ValueError('图像记录不存在。')
+            self.current_image_id = image_id
+            return {'image_id': image_id}
+        return self._result(action)
+
+    @Slot(str, result=str)
     def proposeDamage(self, image_id):
         def action():
+            self.current_image_id = image_id
             image = image_array(self.store.folder(image_id) / 'image.png')
             array, metadata = damage_proposal(image)
-            identifier = new_id(); folder = self.store.folder(identifier)
-            from PIL import Image
-            Image.fromarray(array).save(folder / 'mask.png')
-            proposal = self.store.put('proposal', {'id': identifier, 'image_id': image_id, 'created_at': timestamp(),
-                'fraction': float((array > 0).mean()), 'metadata': metadata})
-            return {'proposal': proposal}
+            return self._save_proposal(image_id, array, metadata)
         return self._result(lambda: self._aux(action, '分析细线候选…'))
 
     @Slot(str, str, str, str, result=str)
     def runSam(self, image_id, points_json, labels_json, box_json):
         def action():
+            self.current_image_id = image_id
             points, labels, box = json.loads(points_json), json.loads(labels_json), json.loads(box_json)
             array = image_array(self.store.folder(image_id) / 'image.png')
             mask, metadata = self.engine.sam.predict(array, points, labels, box)
-            identifier = new_id(); folder = self.store.folder(identifier)
-            from PIL import Image
-            Image.fromarray(mask).save(folder / 'mask.png')
-            proposal = self.store.put('proposal', {'id': identifier, 'image_id': image_id, 'created_at': timestamp(),
-                'fraction': float((mask > 0).mean()), 'metadata': metadata})
-            return {'proposal': proposal}
+            return self._save_proposal(image_id, mask, metadata)
         return self._result(lambda: self._aux(action, 'SAM 分割中…'))
+
+    @Slot(str, result=str)
+    def assessDamage(self, image_id):
+        def action():
+            image = self.store.get('image', image_id)
+            if not image:
+                raise ValueError('图像记录不存在。')
+            from .damage_assessment import assess_image, recommendation_for
+            result = assess_image(self.engine, image)
+            items = []
+            for item in result.get('items', []):
+                enriched = dict(item)
+                enriched['recommendation'] = recommendation_for(item)
+                items.append(enriched)
+            return {'items': items, 'limitations': result.get('limitations', '')}
+        return self._result(lambda: self._aux(action, '本地视觉模型识别缺损…'))
+
+    @Slot(str, str, result=str)
+    def damagePreview(self, image_id, item_json):
+        def action():
+            if not self.store.get('image', image_id):
+                raise ValueError('图像记录不存在。')
+            bbox = [int(value) for value in json.loads(item_json).get('bbox', [])]
+            if len(bbox) != 4:
+                raise ValueError('候选框无效。')
+            with Image.open(self.store.folder(image_id) / 'image.png') as source:
+                preview = source.convert('RGB').copy()
+            width, height = preview.size
+            x0, y0, x1, y1 = bbox
+            box = (round(x0 * width / 1000), round(y0 * height / 1000),
+                   round(x1 * width / 1000), round(y1 * height / 1000))
+            from PIL import ImageDraw
+            ImageDraw.Draw(preview).rectangle(box, outline=(230, 70, 52), width=max(2, min(width, height) // 350))
+            target = self.store.folder(image_id) / 'damage-preview.png'
+            preview.save(target)
+            return {'file_url': self._file_url(target)}
+        return self._result(action)
+
+    @Slot(str, str, result=str)
+    def refineDamage(self, image_id, item_json):
+        def action():
+            if not self.store.get('image', image_id):
+                raise ValueError('图像记录不存在。')
+            self.current_image_id = image_id
+            item = json.loads(item_json)
+            bbox = [int(value) for value in item.get('bbox', [])]
+            if len(bbox) != 4:
+                raise ValueError('候选框无效。')
+            array = image_array(self.store.folder(image_id) / 'image.png')
+            height, width = array.shape[:2]
+            x0, y0, x1, y1 = bbox
+            pad_x, pad_y = max(3, round(width * .005)), max(3, round(height * .005))
+            box = [max(0, round(x0 * width / 1000) - pad_x), max(0, round(y0 * height / 1000) - pad_y),
+                   min(width, round(x1 * width / 1000) + pad_x), min(height, round(y1 * height / 1000) + pad_y)]
+            if item.get('type') == 'crack':
+                from .segmentation import crack_mask_proposal
+                mask, metadata = crack_mask_proposal(array, box)
+            else:
+                mask, metadata = self.engine.sam.predict(array, box=box)
+            from .damage_assessment import recommendation_for
+            metadata.update({key: item[key] for key in ('index', 'type', 'size', 'confidence', 'evidence', 'bbox') if key in item})
+            metadata['recommendation'] = recommendation_for(item)
+            return self._save_proposal(image_id, mask, metadata)
+        return self._result(lambda: self._aux(action, '细化缺损掩膜…'))
 
     @Slot(str, result=str)
     def adoptProposal(self, proposal_id):
@@ -468,13 +548,18 @@ class WebMainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self.closing:
-            self.engine.executor.shutdown(wait=False, cancel_futures=True)
-            event.accept()
-            return
+            # Second close attempt while cancellation is still pending: leave now.
+            # Every finished attempt is checkpointed in SQLite and the next start
+            # marks running jobs as interrupted, so work can be resumed from history.
+            try:
+                self.engine.executor.shutdown(wait=False, cancel_futures=True)
+            finally:
+                os._exit(0)
         active = [j for j in self.store.list('job') if j['status'] in {'queued', 'planning', 'running', 'evaluating'}]
         auxiliary = self.bridge.aux_future and not self.bridge.aux_future.done()
         if active or auxiliary:
             self.closing = True
+            self.bridge.notify.emit('正在取消运行中的任务，完成后自动退出；再点一次关闭可强制退出。')
             for job in active: self.store.update('job', job['id'], cancel_requested=True)
             if auxiliary and self.bridge.aux_future:
                 self.bridge.aux_future.cancel()

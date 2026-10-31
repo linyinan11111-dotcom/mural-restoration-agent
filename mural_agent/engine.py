@@ -48,6 +48,14 @@ class Engine:
         job = self.store.get('job', job_id)
         if not job or job['status'] not in {'interrupted', 'failed', 'cancelled'}:
             raise ValueError('只有中断、失败或取消的任务可续跑。')
+        # The worker thread removes its id from `pending` only after run() returns,
+        # so a terminal status can be observed a few milliseconds before the slot
+        # is released. Wait briefly instead of failing a legitimate resume.
+        for _ in range(100):
+            with self.pending_lock:
+                if job_id not in self.pending:
+                    break
+            time.sleep(0.02)
         with self.pending_lock:
             if job_id in self.pending:
                 raise ValueError('任务尚未停止。')

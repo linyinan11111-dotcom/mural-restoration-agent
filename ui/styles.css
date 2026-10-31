@@ -164,6 +164,12 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 .proposal-preview img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .action-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 .action-row .button { flex: 1 1 150px; }
+.damage-list { max-height: 168px; overflow-y: auto; margin-top: 9px; border: 1px solid var(--line-soft); border-radius: 5px; }
+.damage-item { display: block; width: 100%; text-align: left; background: #fff; border: 0; border-bottom: 1px solid var(--line-soft); padding: 7px 9px; font-size: 10px; }
+.damage-item:last-child { border-bottom: 0; }
+.damage-item b { font-weight: 600; }
+.damage-item small { display: block; color: var(--muted); margin-top: 3px; }
+.damage-item.selected { background: #eef2f6; box-shadow: inset 2px 0 0 #68798d; }
 .reference-search { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(80px, 1fr) auto; gap: 6px; }
 .reference-search input { font-size: 10px; }
 .reference-search .button { font-size: 10px; }

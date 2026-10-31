@@ -1,11 +1,11 @@
-fastapi>=0.115,<1
-uvicorn>=0.34,<1
-python-multipart>=0.0.20,<1
+# Runtime for the shipped desktop shell (Qt WebEngine + local engine).
+# GPU/model packages live in requirements-models.txt; test/dev-only packages
+# (pytest, PyInstaller, the FastAPI regression adapter) live in requirements-dev.txt.
 pillow>=11,<13
 numpy>=2,<3
 opencv-python-headless>=4.11,<5
+scikit-image>=0.26,<0.28
 httpx>=0.28,<1
 PySide6-Essentials>=6.8,<7
 PySide6-Addons>=6.8,<7
 PySide6-WebEngine>=6.8,<7
-

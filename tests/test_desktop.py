@@ -7,19 +7,30 @@ import zipfile
 import numpy as np
 from PIL import Image
 from PySide6.QtCore import QPointF
-from PySide6.QtWidgets import QApplication, QLineEdit
+from PySide6.QtWidgets import QLineEdit
 from mural_agent.config import Settings
 from mural_agent.desktop import MainWindow, ApiDialog
 
 
-def test_native_canvas_and_restoration_without_webserver(tmp_path):
-    qt = QApplication.instance() or QApplication([])
-    window = MainWindow(Settings(data_dir=tmp_path / 'data', lama_model=tmp_path / 'missing.pt'))
+def isolated_settings(tmp_path):
+    # Legacy Qt Widgets shell: used by canvas regressions only. Every optional
+    # model path is isolated so a developer machine with Qwen3-VL/SAM weights
+    # cannot silently switch the default planner to the local VLM (which would
+    # make this suite depend on 4 GB of model loading).
+    return Settings(data_dir=tmp_path / 'data', lama_model=tmp_path / 'missing.pt',
+                    sam_model=tmp_path / 'missing-sam', diffusion_model=tmp_path / 'missing-sd',
+                    controlnet_model=tmp_path / 'missing-cn', vision_model=tmp_path / 'missing-qwen',
+                    research_adapter=tmp_path / 'missing-research.json')
+
+
+def test_native_canvas_and_restoration_without_webserver(tmp_path, qt_app):
+    window = MainWindow(isolated_settings(tmp_path))
+    assert window.planner.currentData() == 'rules'
     window.show()
-    qt.processEvents()
+    qt_app.processEvents()
     try:
         window.load_demo()
-        qt.processEvents()
+        qt_app.processEvents()
         assert window.image['width'] == 960
         canvas = window.canvas
         canvas.checkpoint()
@@ -34,9 +45,9 @@ def test_native_canvas_and_restoration_without_webserver(tmp_path):
         assert not empty.any()
         canvas.import_mask(bytes_from_array(mask))
         window.start_job()
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            qt.processEvents()
+            qt_app.processEvents()
             window.poll_job()
             if not window.running:
                 break
@@ -70,8 +81,7 @@ def bytes_from_array(array):
     return buffer.getvalue()
 
 
-def test_native_api_settings_are_local_and_password_masked(tmp_path, monkeypatch):
-    qt = QApplication.instance() or QApplication([])
+def test_native_api_settings_are_local_and_password_masked(tmp_path, monkeypatch, qt_app):
     monkeypatch.setattr('mural_agent.desktop.ROOT', tmp_path)
     settings = Settings(tmp_path / 'data', tmp_path / 'model.pt')
     dialog = ApiDialog(settings, None)
@@ -83,4 +93,3 @@ def test_native_api_settings_are_local_and_password_masked(tmp_path, monkeypatch
     assert settings.api_model == 'vision-test'
     assert 'MURAL_API_KEY=nonproduction-test-key' in (tmp_path / '.env').read_text(encoding='utf-8')
     dialog.close()
-

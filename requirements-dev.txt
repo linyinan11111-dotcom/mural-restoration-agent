@@ -1,4 +1,7 @@
 -r requirements.txt
 pytest>=8,<10
 pyinstaller>=6,<7
-
+# Development-only FastAPI adapter (mural_agent/app.py) used by regression tests.
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+python-multipart>=0.0.20,<1

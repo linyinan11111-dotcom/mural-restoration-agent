@@ -1,4 +1,8 @@
-"""Native UI for segmentation, evidence, budgets, datasets and operations."""
+"""Legacy Qt Widgets extension page (not shipped).
+
+Only the old ``mural_agent.desktop`` window uses this mixin. The shipped
+WebEngine UI implements the same workflows in ``desktop_web.py`` + ``ui/``.
+"""
 from io import BytesIO
 from pathlib import Path
 import json
@@ -14,7 +18,7 @@ from . import references, datasets, workspace
 from .backup import backup_workspace
 from .imaging import image_array, mask_array
 from .segmentation import damage_proposal, crack_mask_proposal
-from .damage_assessment import assess_image
+from .damage_assessment import assess_image, recommendation_for
 from .storage import new_id, timestamp
 
 
@@ -272,17 +276,9 @@ class FeatureMixin:
         x0, y0, x1, y1 = item['bbox']
         fraction = (x1-x0)*(y1-y0)/10000
         item['bbox_fraction'] = fraction
-        if item['type'] == 'stain':
-            item['recommended_backend'] = item['recommended_tool'] = 'color'
-        elif item['type'] == 'crack':
-            item['recommended_backend'] = item['recommended_tool'] = 'lama' if item['size'] == 'large' else 'ns'
-        elif item['type'] in {'paint_loss', 'plaster_loss'} and item['size'] == 'large':
-            item['recommended_backend'] = item['recommended_tool'] = 'lama'
-        elif item['type'] in {'paint_loss', 'plaster_loss', 'flaking'}:
-            item['recommended_backend'] = item['recommended_tool'] = 'telea'
-        else:
-            item['recommended_backend'] = 'opencv'
-            item['recommended_tool'] = 'telea/ns'
+        recommendation = recommendation_for(item)
+        item['recommended_backend'] = recommendation['backend']
+        item['recommended_tool'] = recommendation['tool']
         self.proposal_note.setText(
             f"疑似{labels[item['type']]}，AI估计{item['size']}，框选约 {fraction:.2f}% 图像面积；"
             f"建议：{methods[item['type']]}。视觉置信 {item['confidence']:.0%} 不是病害概率。"

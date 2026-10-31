@@ -65,7 +65,17 @@ class LamaBackend:
             scale = min(1, self.settings.lama_max_side / max(height, width))
             size = (max(8, round(width * scale)), max(8, round(height * scale)))
             image = np.asarray(Image.fromarray(crop).resize(size, Image.Resampling.LANCZOS)).copy()
-            mask_small = np.asarray(Image.fromarray(crop_mask).resize(size, Image.Resampling.NEAREST)).copy()
+            # NEAREST downscaling can drop a one-pixel crack entirely. Dilate the
+            # mask by the inverse scale so the model still sees the editable region;
+            # the final composite uses the original mask, so extra context is safe.
+            model_mask = crop_mask
+            if scale < 1:
+                import cv2
+                radius = int(np.ceil(1 / scale)) + 1
+                model_mask = cv2.dilate(crop_mask, np.ones((2 * radius + 1, 2 * radius + 1), np.uint8))
+            mask_small = np.asarray(Image.fromarray(model_mask).resize(size, Image.Resampling.NEAREST)).copy()
+            if not (mask_small > 127).any():
+                raise ValueError('掩膜在推理缩放下丢失；请扩大圈选范围或提高推理分辨率。')
             h, w = image.shape[:2]
             image = np.pad(image, ((0, (-h) % 8), (0, (-w) % 8), (0, 0)), mode='symmetric')
             mask_small = np.pad(mask_small, ((0, (-h) % 8), (0, (-w) % 8)), mode='constant')

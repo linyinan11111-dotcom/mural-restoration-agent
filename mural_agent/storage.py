@@ -23,6 +23,7 @@ class Store:
         self.db = root / 'workbench.sqlite3'
         with self.connect() as con:
             con.execute('CREATE TABLE IF NOT EXISTS records (kind TEXT, id TEXT PRIMARY KEY, document TEXT NOT NULL)')
+            con.execute('CREATE INDEX IF NOT EXISTS records_kind ON records(kind)')
         for job in self.list('job'):
             if job['status'] in {'queued', 'planning', 'running', 'evaluating'}:
                 self.update('job', job['id'], status='interrupted', error='应用已重启，可从检查点续跑。')
@@ -31,6 +32,10 @@ class Store:
     def connect(self):
         connection = sqlite3.connect(self.db, timeout=15)
         try:
+            # WAL keeps the 900ms UI polling loop from blocking the worker thread's
+            # writes; synchronous=NORMAL keeps commit latency low for local use.
+            connection.execute('PRAGMA journal_mode=WAL')
+            connection.execute('PRAGMA synchronous=NORMAL')
             with connection:
                 yield connection
         finally:
@@ -77,6 +82,7 @@ class Store:
     def event(self, identifier, message):
         with self.lock:
             job = self.get('job', identifier)
-            events = job.get('events', []) + [{'time': timestamp(), 'message': message}]
+            # Keep the newest 200 events; old ones only slow down every snapshot.
+            events = (job.get('events', []) + [{'time': timestamp(), 'message': message}])[-200:]
             self.update('job', identifier, events=events)
 
