@@ -1,0 +1,153 @@
+{
+  "id": 152259,
+  "accession_number": "1985.14",
+  "share_license_status": "CC0",
+  "tombstone": "Fragment with a Head of Bodhisattva, c. 600–650. Central Asia, Kizil. Fresco; image: 11.7 x 11.7 cm (4 5/8 x 4 5/8 in.); overall: 15.3 x 16 cm (6 x 6 5/16 in.). The Cleveland Museum of Art, John L. Severance Fund, 1985.14",
+  "current_location": null,
+  "title": "Fragment with a Head of Bodhisattva",
+  "creation_date": "c. 600–650",
+  "creation_date_earliest": 600,
+  "creation_date_latest": 650,
+  "artists_tags": [],
+  "culture": [
+    "Central Asia, Kizil"
+  ],
+  "technique": "fresco",
+  "support_materials": [],
+  "department": "Chinese Art",
+  "collection": "Chinese Art",
+  "type": "Painting",
+  "measurements": "Image: 11.7 x 11.7 cm (4 5/8 x 4 5/8 in.); Overall: 15.3 x 16 cm (6 x 6 5/16 in.)",
+  "dimensions": {
+    "image": {
+      "height": 0.117,
+      "height_inch": 4,
+      "height_inch_fraction": 0.625,
+      "width": 0.117,
+      "width_inch": 4,
+      "width_inch_fraction": 0.625
+    },
+    "overall": {
+      "height": 0.153,
+      "height_inch": 6,
+      "height_inch_fraction": 0.0,
+      "width": 0.16,
+      "width_inch": 6,
+      "width_inch_fraction": 0.3125
+    }
+  },
+  "state_of_the_work": null,
+  "edition_of_the_work": null,
+  "copyright": null,
+  "inscriptions": [
+    {
+      "inscription": "\"Second group of caves, cave no. 76\" Excavated during 4th expedition, shipped in \"crate number 74.\"",
+      "inscription_translation": null,
+      "inscription_remark": null,
+      "sortorder": null
+    }
+  ],
+  "exhibitions": {
+    "current": [
+      {
+        "id": 309849,
+        "title": "Year in Review for 1984",
+        "description": "<i>Year in Review for 1984</i>. The Cleveland Museum of Art, Cleveland, OH (organizer) (April 3-May 5, 1985).",
+        "opening_date": "1985-04-03T05:00:00"
+      },
+      {
+        "id": 309887,
+        "title": "The Twain Shall Meet",
+        "description": "<i>The Twain Shall Meet</i>. The Cleveland Museum of Art, Cleveland, OH (organizer) (October 30, 1985-January 5, 1986).",
+        "opening_date": "1985-10-30T05:00:00"
+      }
+    ],
+    "legacy": []
+  },
+  "provenance": [
+    {
+      "description": "(Bukowski 's Zurich Auktionen); (John Suidmak, London)",
+      "citations": [],
+      "footnotes": null,
+      "date": null,
+      "sortorder": null
+    }
+  ],
+  "find_spot": null,
+  "related_works": [],
+  "former_accession_numbers": [],
+  "did_you_know": null,
+  "early_education_description": null,
+  "artlens_description": null,
+  "description": null,
+  "external_resources": {
+    "wikidata": [
+      "https://www.wikidata.org/wiki/Q60475391"
+    ],
+    "internet_archive": [
+      "https://archive.org/details/clevelandart-1985.14-fragment-with-a-head"
+    ]
+  },
+  "citations": [
+    {
+      "citation": "The Bulletin of the Cleveland Museum of Art. Vol. 72, No. 2, The Year in Review for 1984 (Apr., 1985), pp. 163-207.",
+      "page_number": "207, 171",
+      "url": null
+    },
+    {
+      "citation": "Bukowskis Zürich (Firm). Bukowskis Zürich auktionen. 30 November 1984, Asiatica, p. 9, fig. 110.",
+      "page_number": "9",
+      "url": null
+    }
+  ],
+  "url": "https://clevelandart.org/art/1985.14",
+  "images": {
+    "annotation": null,
+    "web": {
+      "url": "https://openaccess-cdn.clevelandart.org/1985.14/1985.14_web.jpg",
+      "width": "900",
+      "height": "865",
+      "filesize": "313631",
+      "filename": "1985.14_web.jpg"
+    },
+    "print": {
+      "url": "https://openaccess-cdn.clevelandart.org/1985.14/1985.14_print.jpg",
+      "width": "3400",
+      "height": "3266",
+      "filesize": "3800672",
+      "filename": "1985.14_print.jpg"
+    },
+    "full": {
+      "url": "https://openaccess-cdn.clevelandart.org/1985.14/1985.14_full.tif",
+      "width": "5068",
+      "height": "4869",
+      "filesize": "74062816",
+      "filename": "1985.14_full.tif"
+    }
+  },
+  "alternate_images": [],
+  "creditline": "John L. Severance Fund",
+  "image_credit": null,
+  "sketchfab_id": null,
+  "sketchfab_url": null,
+  "gallery_donor_text": null,
+  "athena_id": 152259,
+  "creators": [],
+  "legal_status": "accessioned",
+  "accession_date": "1985-01-21T00:00:00",
+  "sortable_date": 600,
+  "date_added_to_oa": null,
+  "date_text": "c. 600–650",
+  "collapse_artists": false,
+  "on_loan": false,
+  "recently_acquired": false,
+  "record_type": "object",
+  "conservation_statement": null,
+  "has_conservation_images": false,
+  "cover_accession_number": null,
+  "is_nazi_era_provenance": false,
+  "impression": null,
+  "alternate_titles": [],
+  "is_highlight": false,
+  "updated_at": "2026-08-03 14:21:07.653000"
+}

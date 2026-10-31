@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' qrc: data: blob:; img-src 'self' file: data: blob:; style-src 'self'; script-src 'self' qrc:; connect-src 'self' qrc:;">
+  <title>拾壁 · 壁画修复工作台</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">拾</span><span><b>拾壁</b><small>MURAL RESTORATION</small></span></div>
+      <button class="new-task" data-action="new-task"><span class="plus">+</span> 新建修复任务</button>
+      <div class="side-label">工作空间</div>
+      <nav class="primary-nav">
+        <button class="nav-item active" data-page="workbench"><span class="nav-icon icon-work"></span>工作台</button>
+        <button class="nav-item" data-page="tools"><span class="nav-icon icon-tools"></span>工具与评测</button>
+        <button class="nav-item" data-page="history"><span class="nav-icon icon-history"></span>历史记录</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="side-label">本机模型</div>
+        <div id="model-list" class="model-list"></div>
+        <button class="nav-item settings-link" data-action="open-settings"><span class="nav-icon icon-settings"></span>API 设置</button>
+        <small class="version">DESKTOP · 1.0</small>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div><div class="crumb">拾壁 <span>/</span> 数字壁画修复</div><h1 id="page-title">修复工作台</h1></div>
+        <div class="top-actions"><span id="engine-status" class="status-pill"><i></i>本地引擎</span><button class="icon-button" data-action="open-settings" aria-label="设置" title="API 设置"><span class="icon-settings"></span></button></div>
+      </header>
+
+      <section id="page-workbench" class="page active">
+        <div class="workbench">
+          <section class="center-column">
+            <div class="image-heading"><div><strong id="image-name">导入壁画图像</strong><span id="image-meta">选择本地图片开始</span></div><div class="image-actions"><button class="button" data-action="open-image">打开图像</button><button class="button subtle" data-action="load-demo">练习图</button></div></div>
+            <div class="view-tabs"><button class="view-tab active" data-view="edit">圈选修复区</button><button class="view-tab" data-view="results">候选对照 <span id="candidate-count" class="count">0</span></button></div>
+
+            <div id="edit-view" class="view-panel active">
+              <div class="canvas-toolbar">
+                <div class="tool-group"><button class="tool-button active" data-tool="brush" title="画笔">画笔</button><button class="tool-button" data-tool="eraser" title="橡皮">橡皮</button><span class="toolbar-divider"></span><label class="range-label">笔径 <input id="brush-size" type="range" min="4" max="120" value="28"><output id="brush-value">28</output></label></div>
+                <div class="tool-group"><button class="icon-button" data-action="undo" title="撤销">撤销</button><button class="icon-button" data-action="clear-mask" title="清空掩膜">清空</button><button class="icon-button" data-action="import-mask" title="导入掩膜">导入掩膜</button><span class="toolbar-divider"></span><button class="icon-button" data-action="zoom-out" title="缩小">−</button><button class="icon-button" data-action="zoom-fit" title="适应窗口">适应</button><button class="icon-button" data-action="zoom-in" title="放大">+</button></div>
+              </div>
+              <div id="image-stage" class="image-stage">
+                <div id="empty-state" class="empty-state"><div class="empty-icon"><span></span></div><strong>把一幅壁画带入工作台</strong><p>原图会单独保存，修复只作用于你圈选的区域。</p><button class="button primary" data-action="open-image">选择图像</button></div>
+                <div id="canvas-wrap" class="canvas-wrap hidden"><img id="source-image" draggable="false"><canvas id="mask-canvas"></canvas></div>
+              </div>
+              <div class="canvas-footer"><span id="mask-status">红色表示允许编辑</span><span>Ctrl + 滚轮缩放 · B 画笔 · E 橡皮</span></div>
+            </div>
+
+            <div id="results-view" class="view-panel results-panel">
+              <div id="candidate-strip" class="candidate-strip"><div class="empty-inline">修复候选会显示在这里</div></div>
+              <div class="comparison-toolbar"><select id="comparison-mode"><option value="compare">滑动对照</option><option value="result">修复结果</option><option value="difference">修改差异</option></select><span>原图</span><input id="compare-range" type="range" min="0" max="100" value="50"><span>候选</span><span id="candidate-device" class="muted"></span></div>
+              <div id="comparison-stage" class="comparison-stage"><div class="empty-inline">选择候选查看结果</div></div>
+              <div id="candidate-metrics" class="metrics-line">掩膜外像素保持不变；工程评分不代表历史真实性。</div>
+              <div class="review-row"><input id="review-note" maxlength="2000" placeholder="复核意见（选填）"><button class="button primary" data-action="select-candidate" disabled>选定候选</button><button class="button" data-action="save-result" disabled>保存图片</button><button class="button" data-action="export-archive" disabled>导出档案</button></div>
+            </div>
+          </section>
+
+          <aside class="inspector">
+            <div class="inspector-section"><div class="section-title"><span>修复方案</span><span id="mask-fraction" class="muted"></span></div>
+              <label class="field-label" for="repair-mode">修复模式</label><select id="repair-mode"><option value="conservative">保守修补</option><option value="evidence">证据辅助重建</option><option value="speculative">推测性补全</option></select>
+              <label class="field-label" for="repair-backend">修复引擎</label><select id="repair-backend"></select>
+              <label class="field-label" for="planner">规划方式</label><select id="planner"><option value="rules">本地规则 · 无需密钥</option><option value="local">本地 Qwen3-VL · 无需 API</option><option value="api">视觉 API</option></select><small id="planner-note" class="field-note">本地规则不会发送图像。</small>
+              <div class="field-row"><label class="field-label" for="candidate-number">候选数量</label><select id="candidate-number"><option value="1">1 个</option><option value="2" selected>2 个</option><option value="3">3 个</option></select></div>
+              <label class="field-label" for="instructions">修复备注</label><textarea id="instructions" maxlength="2000" rows="3" placeholder="例如：保留现有色调，只修补细裂缝。"></textarea>
+              <label class="check-row"><input id="controlnet" type="checkbox" disabled><span>推测模式使用结构控制</span></label>
+              <div class="budget-row"><label>修订轮数 <input id="revisions" type="number" min="0" max="2" value="2"></label><label>时间上限 <input id="timeout" type="number" min="10" max="3600" value="300"></label></div>
+              <button class="button primary run-button" data-action="run-repair" disabled>生成修复候选 <span>↗</span></button>
+              <button class="button cancel-button hidden" data-action="cancel-job">取消当前任务</button>
+              <button class="button hidden" data-action="resume-job" id="resume-button">从检查点续跑</button>
+            </div>
+            <div class="execution-section"><div class="section-title"><span>执行记录</span><span id="job-status" class="status-text">尚未开始</span></div><div class="progress-track"><span id="job-progress"></span></div><div id="event-log" class="event-log"><div class="empty-log">生成任务后显示规划、工具调用与检查结果。</div></div></div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="page-tools" class="page hidden">
+        <div class="tools-layout">
+          <div class="tools-main">
+            <div class="page-intro"><div><h2>辅助工具</h2><p>选区建议需要人工确认；自动分割不等于病害诊断。</p></div></div>
+            <section class="tool-panel"><div class="panel-heading"><div><h3>辅助选区</h3><p>使用细线分析或 SAM 点/框提示，再检查并应用掩膜。</p></div><span id="sam-status" class="quiet-badge">待命</span></div><div class="action-grid"><button class="button" data-action="propose-damage">分析细线候选</button><button class="button" data-action="sam-point">SAM 点选</button><button class="button" data-action="sam-box">SAM 框选</button><button class="button" data-action="run-sam">执行分割</button><button class="button" data-action="clear-prompts">清除提示</button></div><div id="proposal-note" class="notice">辅助选区还未生成。</div><div class="proposal-preview"><img id="proposal-image" class="hidden"><div id="proposal-empty" class="empty-inline">候选掩膜预览</div></div><div class="action-row"><button class="button" data-action="use-proposal" disabled>替换当前掩膜</button><button class="button" data-action="merge-proposal" disabled>与当前掩膜合并</button></div></section>
+            <section class="tool-panel"><div class="panel-heading"><div><h3>参考资料与证据</h3><p>来源和对应关系会记录到修复档案中。</p></div><button class="button" data-action="add-reference">导入参考</button></div><div class="reference-search"><input id="reference-query" placeholder="题材 / 来源关键词"><input id="reference-group" placeholder="壁画分组"><button class="button" data-action="search-references">检索</button></div><div id="reference-list" class="reference-list"><div class="empty-inline">暂无参考资料</div></div><div class="action-row"><button class="button" data-action="register-reference" disabled>配准所选参考</button><button class="button" data-action="approve-reference" disabled>核验应用区域</button></div><div id="registration-note" class="notice">视觉相似不等于历史证据。</div><div id="registration-preview" class="registration-preview"></div></section>
+          </div>
+          <div class="tools-side">
+            <section class="tool-panel"><div class="panel-heading"><div><h3>数据与评测</h3><p>固定测试集应按原壁画分组，避免图像泄漏。</p></div></div><div class="stack-actions"><button class="button" data-action="import-dataset">导入数据清单 JSONL</button><button class="button" data-action="export-splits">导出分组划分</button><button class="button" data-action="evaluate-pair">配对目标评测</button><button class="button" data-action="batch-jobs">批量修复任务</button></div><div id="dataset-note" class="notice">真实病害图没有配对目标时，只能做工程检查。</div></section>
+            <section class="tool-panel"><div class="panel-heading"><div><h3>模型与维护</h3><p>本机模型按需加载，单次任务顺序使用 GPU。</p></div></div><div class="stack-actions"><button class="button" data-action="show-models">查看模型环境</button><button class="button" data-action="backup-workspace">备份工作空间</button></div></section>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-history" class="page hidden">
+        <div class="history-page"><div class="page-intro"><div><div class="crumb">工作空间 <span>/</span> 历史记录</div><h2>修复记录</h2></div><button class="button" data-page="workbench">返回工作台</button></div><input id="history-filter" class="history-search" placeholder="按图像名称筛选"><div id="history-list" class="history-list"></div></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="settings-modal" class="modal hidden"><div class="modal-backdrop" data-action="close-settings"></div><div class="modal-card"><div class="modal-head"><h2>视觉 API 设置</h2><button class="icon-button" data-action="close-settings" aria-label="关闭">×</button></div><p>仅在选择 API 规划器时发送缩略图、掩膜预览和备注。</p><label>接口协议<select id="api-kind"><option value="responses">Responses</option><option value="chat_completions">Chat Completions 兼容服务</option></select></label><label>服务根地址<input id="api-base" placeholder="https://api.openai.com/v1"></label><label>视觉模型<input id="api-model" placeholder="账户可用的视觉模型"></label><label>API 密钥<input id="api-key" type="password" autocomplete="new-password" placeholder="留空以保留当前密钥"></label><label class="check-row"><input id="api-json" type="checkbox" checked><span>启用 JSON 输出格式</span></label><div id="api-error" class="error-text"></div><div class="modal-actions"><button class="button" data-action="close-settings">取消</button><button class="button primary" data-action="save-settings">保存设置</button></div></div></div>
+  <div id="toast" class="toast hidden"></div>
+</body>
+</html>

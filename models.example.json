@@ -1,0 +1,1 @@
+{"python":"D:/environments/mural-research/python.exe","script":"D:/research-model/infer_adapter.py","repository_commit":"填写实际仓库 commit","weight_sha256":"填写实际 checkpoint SHA256","license":"填写已核实的代码与权重使用许可","timeout":240,"protocol":"Read the JSON request from argv[1], preserve input files, save RGB PNG to request.output. No arbitrary commands from plans."}
