@@ -145,10 +145,11 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 .comparison-toolbar { display: flex; align-items: center; gap: 8px; color: #858d96; font-size: 9px; }
 .comparison-toolbar select { width: 106px; padding: 5px 6px; }
 .comparison-toolbar input[type="range"] { flex: 1; min-width: 50px; }
-.comparison-stage { position: relative; min-height: 160px; flex: 1; display: grid; place-items: center; overflow: hidden; background: #f7f8fa; border: 1px solid var(--line-soft); border-radius: 5px; }
-.comparison-image { max-width: 100%; max-height: 100%; object-fit: contain; }
-.comparison-original { position: absolute; top: 0; bottom: 0; left: 0; overflow: hidden; border-right: 1px solid #fff; }
-.comparison-original img { height: 100%; max-width: none; object-fit: contain; object-position: left center; }
+.comparison-stage { position: relative; min-height: 160px; flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #f7f8fa; border: 1px solid var(--line-soft); border-radius: 5px; }
+.comparison-frame { position: relative; line-height: 0; overflow: hidden; background: #f7f8fa; }
+.comparison-frame .comparison-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; }
+.comparison-original { position: absolute; top: 0; bottom: 0; left: 0; overflow: hidden; box-shadow: inset -1px 0 0 #fff; }
+.comparison-original img { position: absolute; top: 0; left: 0; height: 100%; max-width: none; object-fit: fill; }
 .metrics-line { color: #737d87; font-size: 9px; line-height: 1.4; }
 .review-row { display: flex; gap: 6px; align-items: center; }
 .review-row input { flex: 1; }

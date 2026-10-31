@@ -286,6 +286,34 @@ def test_damage_panel_renders_candidates_and_recommendation(window, qt_app):
     assert 'LaMa' in rendered['note']
 
 
+def test_swipe_comparison_keeps_both_images_on_the_same_rect(window, qt_app):
+    image_id, candidate_id = new_id(), new_id()
+    Image.new('RGB', (960, 640), '#c3c3c3').save(window.store.folder(image_id) / 'image.png')
+    Image.new('RGB', (960, 640), '#7a7a7a').save(window.store.folder(candidate_id) / 'result.png')
+    source_url = window.bridge._file_url(window.store.folder(image_id) / 'image.png')
+    result_url = window.bridge._file_url(window.store.folder(candidate_id) / 'result.png')
+    script = ("(() => {"
+              " document.querySelector('.view-tab[data-view=\"results\"]').click();"
+              " const state = window.__shibui.state;"
+              f" state.image = {{id: '{image_id}', width: 960, height: 640, file_url: '{source_url}'}};"
+              f" state.candidate = {{file_url: '{result_url}', difference_url: '{result_url}', metrics: {{}}}};"
+              " document.querySelector('#comparison-mode').value = 'compare';"
+              " window.__shibui.renderComparison();"
+              " return true; })()")
+    assert run_js(window, script) is True
+    assert wait_until(qt_app, lambda: run_js(window, "(() => { const imgs = [...document.querySelectorAll('.comparison-frame img')]; return imgs.length === 2 && imgs.every(img => img.naturalWidth > 0); })()") is True, 20)
+    assert wait_until(qt_app, lambda: run_js(window, "(() => { const frame = document.querySelector('.comparison-frame'); return frame && frame.getBoundingClientRect().width > 0; })()") is True, 10)
+    run_js(window, 'window.__shibui.layoutComparison(); true')
+    rects = json.loads(run_js(window, """JSON.stringify([...document.querySelectorAll('.comparison-frame img')]
+      .map(img => { const r = img.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }))"""))
+    assert len(rects) == 2, rects
+    for left, right in zip(rects[0], rects[1]):
+        assert abs(left - right) < 1.5, rects
+    frame = json.loads(run_js(window, """JSON.stringify((() => {
+      const r = document.querySelector('.comparison-frame').getBoundingClientRect(); return [r.width, r.height]; })())"""))
+    assert abs(frame[0] / frame[1] - 960 / 640) < 0.02, frame
+
+
 def test_merge_proposal_and_aux_version_contract(window, qt_app):
     demo = json.loads(window.bridge.loadDemo())
     image_id = demo['id']

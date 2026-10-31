@@ -58,6 +58,7 @@
     $$('.view-tab').forEach(item => item.classList.toggle('active', item.dataset.view === view));
     $('#edit-view').classList.toggle('active', view === 'edit');
     $('#results-view').classList.toggle('active', view === 'results');
+    if (view === 'results') requestAnimationFrame(layoutComparison);
   }
 
   function setTool(tool) {
@@ -336,22 +337,57 @@
     renderComparison();
   }
 
+  function applySwipe() {
+    const layer = $('.comparison-original');
+    if (!layer) return;
+    const ratio = Math.min(100, Math.max(0, Number($('#compare-range').value) || 0));
+    layer.style.width = `${ratio}%`;
+    const inner = layer.querySelector('img');
+    if (inner) inner.style.width = ratio > 0 ? `${10000 / ratio}%` : '0';
+  }
+
+  function layoutComparison() {
+    const frame = $('.comparison-frame');
+    if (!frame || !state.image) return;
+    const stage = $('#comparison-stage');
+    const width = state.image.width, height = state.image.height;
+    if (!width || !height) return;
+    const availableWidth = stage.clientWidth - 2;
+    const availableHeight = stage.clientHeight - 2;
+    if (availableWidth <= 0 || availableHeight <= 0) return;
+    const scale = Math.min(availableWidth / width, availableHeight / height);
+    frame.style.width = `${Math.max(1, Math.round(width * scale))}px`;
+    frame.style.height = `${Math.max(1, Math.round(height * scale))}px`;
+    applySwipe();
+  }
+
   function renderComparison() {
     const candidate = state.candidate; if (!candidate || !state.image) return;
     const stage = $('#comparison-stage'); const mode = $('#comparison-mode').value;
     const sourceUrl = fileUrl(state.image.file_url);
     const url = mode === 'difference' ? fileUrl(candidate.difference_url) : fileUrl(candidate.file_url);
-    stage.innerHTML = `<img class="comparison-image" src="${url}">`;
+    // One frame sized to the working image keeps the candidate and the original
+    // on exactly the same rectangle; previously the overlay was sized to the
+    // stage height while the candidate was letterboxed, so the swipe did not line up.
+    stage.innerHTML = '';
+    const frame = document.createElement('div');
+    frame.className = 'comparison-frame';
+    const base = document.createElement('img');
+    base.className = 'comparison-image';
+    base.src = url;
+    frame.appendChild(base);
     if (mode === 'compare') {
-      const layer = document.createElement('div'); layer.className = 'comparison-original';
-      const original = document.createElement('img'); original.src = sourceUrl; layer.appendChild(original); stage.appendChild(layer);
-      const apply = () => {
-        const ratio = Number($('#compare-range').value);
-        layer.style.width = `${ratio}%`; original.style.width = `${10000 / Math.max(1, ratio)}%`;
-      };
-      $('#compare-range').oninput = apply; apply();
-    } else $('#compare-range').disabled = true;
+      const layer = document.createElement('div');
+      layer.className = 'comparison-original';
+      const original = document.createElement('img');
+      original.src = sourceUrl;
+      layer.appendChild(original);
+      frame.appendChild(layer);
+      $('#compare-range').oninput = applySwipe;
+    }
+    stage.appendChild(frame);
     $('#compare-range').disabled = mode !== 'compare';
+    layoutComparison();
     const metrics = candidate.metrics || {};
     $('#candidate-device').textContent = `${candidate.versions?.device || ''} · ${candidate.elapsed_seconds || 0}s`;
     $('#candidate-metrics').textContent = `掩膜外最大差异 ${metrics.outside_max_difference ?? '-'} · 边界色差 ${metrics.boundary_color_gap ?? '-'} · ${candidate.speculative ? '推测性内容需单独复核' : '工程指标不代表历史真实性'}`;
@@ -665,6 +701,7 @@
   $('#history-filter').addEventListener('input', () => renderHistory());
   $('#source-image').addEventListener('load', updateCanvasSize);
   new ResizeObserver(updateCanvasSize).observe($('#image-stage'));
+  new ResizeObserver(() => layoutComparison()).observe($('#comparison-stage'));
 
   canvas.addEventListener('pointerdown', event => {
     if (!state.image || !image.naturalWidth || state.running) return;
@@ -704,5 +741,6 @@
 
   // Test seam: the acceptance tests drive the same mask round-trip and job flow
   // through the shipped frontend instead of duplicating the logic in Python.
-  window.__shibui = { state, loadImage, installMask, showMaskFromBase64, exportMaskBase64, refresh, renderDamage };
+  window.__shibui = { state, loadImage, installMask, showMaskFromBase64, exportMaskBase64, refresh, renderDamage,
+    renderComparison, layoutComparison };
 })();

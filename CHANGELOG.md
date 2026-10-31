@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 2026-10-31 修复：滑动对照两张图对不上
+
+- **原因**：原实现里候选图用 `object-fit: contain` 居中在对照舞台中，会被上下/左右留白（letterbox）；而“原图”图层按**舞台高度**铺满、宽度按滑动比例裁剪。两者缩放比例和起点不同，所以滑到任意位置都会错位；叠加层的 `border` 还会吃掉 1–2 px。
+- **修复**：引入一个与工作图宽高比一致的 `.comparison-frame`（由 JS 按舞台可用空间等比计算尺寸，`ResizeObserver` 在窗口/视图变化时重算），候选与原图都以 `inset:0; width/height:100%` 铺在同一矩形上，滑动层只做裁剪；分隔线改用 `box-shadow` 不再影响布局。
+- **测试**：新增 `test_swipe_comparison_keeps_both_images_on_the_same_rect`，用 `getBoundingClientRect` 断言两张图的 left/top/width/height 一致，并校验 frame 宽高比；**42 passed**。
+
 ## 2026-10-31 新增：图片/ 示例图库
 
 - 新增 `图片/` 文件夹：8 张**单幅**壁画照片（5 张克利夫兰艺术博物馆 CC0、Ajanta CC0、Nebamun / Dunhuang Public domain），约 2.6 MB。
