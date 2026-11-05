@@ -1,4 +1,4 @@
-from concurrent.futures import ThreadPoolExecutor
+﻿from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import json
 import platform
@@ -95,6 +95,29 @@ class Engine:
                                     job['backend'], job['candidate_count'], fraction, job['instructions'])
             except Exception:
                 self.store.event(job['id'], ('本地视觉模型' if job['planner'] == 'local' else 'API')+'规划失败或返回格式不合要求，已明确回退到本地规则规划。')
+        if job.get('mode', 'conservative') == 'conservative':
+            from .planner import diversify_repair_methods
+            include_reference = False
+            registration = self.store.get('registration', job.get('registration_id', ''))
+            if registration and registration.get('approved') and registration.get('image_id') == job['image_id']:
+                reference = self.store.get('reference', registration.get('reference_id', ''))
+                if reference and reference.get('metadata', {}).get('relation') in {'same_mural', 'tracing'}:
+                    approved = mask_array(self.store.folder(registration['id']) / 'approved.png')
+                    import cv2
+                    component_count, _, component_stats, _ = cv2.connectedComponentsWithStats((mask > 0).astype(np.uint8), 8)
+                    largest_fraction = (int(component_stats[1:, cv2.CC_STAT_AREA].max()) / mask.size
+                                        if component_count > 1 else 0.)
+                    include_reference = (largest_fraction >= .01 and
+                                         not ((mask > 0) & (approved == 0)).any())
+            plan = diversify_repair_methods(plan, job['backend'], job['candidate_count'],
+                                             self.tools.availability(), include_reference=include_reference)
+            if include_reference and any(step.tool == 'reference' for step in plan.steps):
+                self.store.event(job['id'], '已核验同壁画/临摹参考覆盖当前缺损；将生成参考转移对照候选。')
+            if len(plan.steps) < job['candidate_count']:
+                job['candidate_count'] = len(plan.steps)
+                job['budget']['candidates'] = len(plan.steps)
+                self.store.update('job', job['id'], candidate_count=len(plan.steps), budget=job['budget'])
+                self.store.event(job['id'], f'当前可用的独立修复方法只有 {len(plan.steps)} 种，候选数量已相应调整。')
         # Runtime policy is authoritative; the model cannot alter budget/evidence/mode.
         plan.mode = job.get('mode', 'conservative')
         plan.regions = [Region(mask_id=job['mask_id'], protected_objects=job.get('protected_objects', []))]
@@ -104,6 +127,19 @@ class Engine:
             if step.tool == 'diffusion':
                 step.prompt = job['instructions'] or step.prompt
                 step.structure_control = job.get('structure_control', False)
+                if job.get('mode') == 'enhanced':
+                    from .segmentation import ENHANCED_DIFFUSION_STRENGTH
+                    from .professional import ENHANCED_DIFFUSION_PROMPT, ENHANCED_NEGATIVE_PROMPT
+                    step.strength = float(ENHANCED_DIFFUSION_STRENGTH)
+                    if not (job.get('instructions') or '').strip():
+                        step.prompt = ENHANCED_DIFFUSION_PROMPT
+                    # negative_prompt is not on Step model; stash on reason for worker via prompt only.
+                    # model_worker reads step.prompt; enhanced demo passes negative separately.
+                    if 'eliminate visible craquelure' not in (step.prompt or ''):
+                        step.prompt = ((step.prompt or '') + ' ' + ENHANCED_DIFFUSION_PROMPT).strip()[:2000]
+            elif job.get('mode') == 'enhanced' and step.tool in {'telea', 'ns'}:
+                # Bolder traditional fill for crack-killing when SD unavailable.
+                step.radius = max(step.radius, 7)
         return plan
 
     def revise(self, job, step, metrics):
@@ -127,10 +163,44 @@ class Engine:
             self.check_cancel(job_id)
             job = self.store.get('job', job_id)
             previous_elapsed = float(job.get('elapsed_seconds', 0))
+            self.store.update('job', job_id, started_at=timestamp())
             image = self.store.get('image', job['image_id'])
             mask_record = self.store.get('mask', job['mask_id'])
             original, mask = self.validate_inputs(job, image, mask_record)
+            from .professional import validate_job_record_for_execution
+            validate_job_record_for_execution(job, mask_record)
             self.store.event(job_id, '已校验原图与冻结掩膜 hash；候选始终从该输入版本产生。')
+            enhanced_meta = None
+            base_for_tools = original
+            if job.get('mode') == 'enhanced':
+                from .segmentation import build_enhanced_work_mask
+                from .imaging import opencv_inpaint  # composite already imported at module scope
+                work_mask, enhanced_meta = build_enhanced_work_mask(original, mask)
+                Image.fromarray(work_mask).save(self.store.folder(job_id) / 'enhanced_work_mask.png')
+                (self.store.folder(job_id) / 'enhanced_mask_meta.json').write_text(
+                    __import__('json').dumps(enhanced_meta, ensure_ascii=False, indent=2), encoding='utf-8')
+                # Conservative base first (LaMa / Telea), then stronger tools see this base.
+                try:
+                    if self.lama.available():
+                        cons_pred = self.lama.predict(original, mask)
+                        base_for_tools = composite(original, cons_pred, mask)
+                        self.store.event(job_id, '加强修复：已用 LaMa 生成保守底图，再对露底∪裂纹掩膜加强。')
+                    else:
+                        cons_pred = opencv_inpaint(original, mask, 'telea', 5)
+                        base_for_tools = composite(original, cons_pred, mask)
+                        self.store.event(job_id, '加强修复：已用 Telea 生成保守底图，再对露底∪裂纹掩膜加强。')
+                    Image.fromarray(base_for_tools).save(self.store.folder(job_id) / 'enhanced_conservative_base.png')
+                except Exception as exc:
+                    self.store.event(job_id, f'加强修复：保守底图失败，回退原图加强：{str(exc)[:160]}')
+                    base_for_tools = original
+                mask = work_mask
+                self.store.update('job', job_id, enhanced_mask_meta=enhanced_meta)
+                frac = enhanced_meta.get('enhanced_fraction', 0)
+                lac = enhanced_meta.get('lacuna_fraction', 0)
+                crk = enhanced_meta.get('crack_fraction', 0)
+                self.store.event(
+                    job_id,
+                    f'加强允许掩膜占比 {frac:.2%}（露底 {lac:.2%} + 裂纹 {crk:.2%}）。')
             if job.get('plan'):
                 plan = Plan.model_validate(job['plan'])
             else:
@@ -163,6 +233,15 @@ class Engine:
                     break
                 step = Step.model_validate(next_step) if next_step else plan.steps[min(len(candidates), len(plan.steps)-1)]
                 next_step = None
+                if job.get('mode', 'conservative') == 'conservative' and candidates:
+                    used_methods = {candidate.get('tool') for candidate in candidates}
+                    if step.tool in used_methods:
+                        alternate = next((candidate_step for candidate_step in plan.steps
+                                          if candidate_step.tool not in used_methods), None)
+                        if alternate is None:
+                            exit_reason = 'distinct_method_limit'
+                            break
+                        step = alternate
                 identifier = new_id()
                 attempt = {'id': identifier, 'step': step.model_dump(), 'status': 'executing', 'started_at': timestamp(),
                            'input_image_id': image['id'], 'mask_id': mask_record['id']}
@@ -171,7 +250,7 @@ class Engine:
                 self.store.event(job_id, f'尝试 {len(attempts)}：{step.tool}；{step.reason}')
                 started = time.monotonic()
                 try:
-                    prediction, versions = self.tools.execute(step, original, mask, job, self.store.folder(identifier), remaining)
+                    prediction, versions = self.tools.execute(step, base_for_tools, mask, job, self.store.folder(identifier), remaining)
                     self.check_cancel(job_id)
                     if prediction.shape != original.shape or not np.isfinite(prediction).all():
                         raise ValueError('工具输出尺寸异常或存在非有限像素。')
@@ -186,7 +265,9 @@ class Engine:
                     Image.fromarray(make_difference(original, output)).save(folder/'difference.png')
                     candidate = {'id': identifier, 'job_id': job_id, 'image_id': image['id'], 'mask_id': mask_record['id'],
                         'tool': step.tool, 'radius': step.radius, 'parameters': step.model_dump(),
-                        'parent_version': image['id'], 'speculative': job.get('mode') == 'speculative',
+                        'parent_version': image['id'],
+                           'speculative': job.get('mode') == 'speculative',
+                           'enhanced': job.get('mode') == 'enhanced',
                         'metrics': metrics, 'elapsed_seconds': round(time.monotonic()-started, 2), 'versions': versions,
                         'created_at': timestamp(), 'raw_sha256': sha256(folder/'raw.png'), 'result_sha256': sha256(folder/'result.png'),
                         'url': f'/api/assets/{identifier}/result.png', 'difference_url': f'/api/assets/{identifier}/difference.png'}
@@ -203,7 +284,7 @@ class Engine:
                     raise
                 except Exception as exc:
                     self.check_cancel(job_id)
-                    message = str(exc)[:400] if isinstance(exc, (ValueError, RuntimeError)) else '工具执行失败，请查看诊断日志。'
+                    message = str(exc)[:400] if isinstance(exc, (ValueError, RuntimeError)) else f'{type(exc).__name__}: {exc}'[:400]
                     attempt.update(status='failed', error=message)
                     self.store.event(job_id, message)
                     if len(revisions) >= budget.revisions:

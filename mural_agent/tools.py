@@ -59,14 +59,26 @@ class ToolRegistry:
                 blur = cv2.GaussianBlur(original, (0, 0), 1.2)
                 output = cv2.addWeighted(original, 1.5, blur, -.5, 0)
             return output, {'device': 'cpu', 'opencv': cv2.__version__, 'method': {'color': 'local_tone_match', 'deblur': 'unsharp_mask', 'denoise': 'nlmeans'}[step.tool]}
-        if step.tool == 'diffusion' and job.get('mode') != 'speculative':
-            raise ValueError('扩散生成仅允许在推测性补全模式执行。')
+        if step.tool == 'diffusion' and job.get('mode') not in {'speculative', 'enhanced'}:
+            raise ValueError('扩散生成仅允许在推测性补全或加强修复模式执行。')
         # Release resident models before launching a separate interpreter on a 12GB GPU.
         engine.lama.unload()
         engine.sam.unload()
-        request = {'protocol': 1, 'tool': step.tool, 'step': step.model_dump(),
-            'image': str(store.folder(job['image_id']) / 'image.png'),
-            'mask': str(store.folder(job['mask_id']) / 'mask.png'),
+        # Persist the in-memory working image/mask (enhanced may expand mask / use conservative base).
+        Image.fromarray(original).save(attempt_folder / 'work_image.png')
+        Image.fromarray(mask).save(attempt_folder / 'work_mask.png')
+        step_payload = step.model_dump()
+        if job.get('mode') == 'enhanced':
+            from .segmentation import ENHANCED_DIFFUSION_STRENGTH
+            from .professional import ENHANCED_DIFFUSION_PROMPT, ENHANCED_NEGATIVE_PROMPT
+            step_payload['strength'] = float(step_payload.get('strength') or ENHANCED_DIFFUSION_STRENGTH)
+            if step_payload['strength'] < 0.9:
+                step_payload['strength'] = float(ENHANCED_DIFFUSION_STRENGTH)
+            step_payload['prompt'] = step_payload.get('prompt') or ENHANCED_DIFFUSION_PROMPT
+            step_payload['negative_prompt'] = ENHANCED_NEGATIVE_PROMPT
+        request = {'protocol': 1, 'tool': step.tool, 'step': step_payload,
+            'image': str(attempt_folder / 'work_image.png'),
+            'mask': str(attempt_folder / 'work_mask.png'),
             'output': str(attempt_folder / 'raw.png'), 'device': s.device,
             'model': str(s.diffusion_model), 'controlnet': str(s.controlnet_model),
             'research_adapter': str(s.research_adapter), 'cancel_file': str(store.folder(job['id']) / 'cancel')}

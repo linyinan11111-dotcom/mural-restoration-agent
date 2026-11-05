@@ -37,19 +37,19 @@
       <section id="page-workbench" class="page active">
         <div class="workbench">
           <section class="center-column">
-            <div class="image-heading"><div><strong id="image-name">导入壁画图像</strong><span id="image-meta">选择本地图片开始</span></div><div class="image-actions"><button class="button" data-action="open-image">打开图像</button><button class="button subtle" data-action="load-demo">练习图</button></div></div>
+            <div class="image-heading"><div><strong id="image-name">导入壁画图像</strong><span id="image-meta">选择本地图片开始</span></div><div class="image-actions"><button class="button" data-action="open-image">打开图像</button><button class="button subtle" data-action="load-demo">练习图</button><button class="button subtle" data-action="load-competition-demo">比赛观察包</button></div></div>
             <div class="view-tabs"><button class="view-tab active" data-view="edit">圈选修复区</button><button class="view-tab" data-view="results">候选对照 <span id="candidate-count" class="count">0</span></button></div>
 
             <div id="edit-view" class="view-panel active">
               <div class="canvas-toolbar">
-                <div class="tool-group"><button class="tool-button active" data-tool="brush" title="画笔">画笔</button><button class="tool-button" data-tool="eraser" title="橡皮">橡皮</button><span class="toolbar-divider"></span><label class="range-label">笔径 <input id="brush-size" type="range" min="4" max="120" value="28"><output id="brush-value">28</output></label></div>
+                <div class="tool-group"><button class="tool-button active" data-tool="brush" title="可修露底（琥珀）">可修露底</button><button class="tool-button" data-tool="uncertain" title="不确定（红）">不确定</button><button class="tool-button" data-tool="unrestorable" title="不可复原（红斜线）">不可复原</button><button class="tool-button" data-tool="eraser" title="橡皮">橡皮</button><span class="toolbar-divider"></span><label class="range-label">笔径 <input id="brush-size" type="range" min="4" max="120" value="28"><output id="brush-value">28</output></label></div>
                 <div class="tool-group"><button class="icon-button" data-action="undo" title="撤销">撤销</button><button class="icon-button" data-action="clear-mask" title="清空掩膜">清空</button><button class="icon-button" data-action="import-mask" title="导入掩膜">导入掩膜</button><span class="toolbar-divider"></span><button class="icon-button" data-action="zoom-out" title="缩小">−</button><button class="icon-button" data-action="zoom-fit" title="适应窗口">适应</button><button class="icon-button" data-action="zoom-in" title="放大">+</button></div>
               </div>
               <div id="image-stage" class="image-stage">
                 <div id="empty-state" class="empty-state"><div class="empty-icon"><span></span></div><strong>把一幅壁画带入工作台</strong><p>原图会单独保存，修复只作用于你圈选的区域。</p><button class="button primary" data-action="open-image">选择图像</button></div>
-                <div id="canvas-wrap" class="canvas-wrap hidden"><img id="source-image" draggable="false"><canvas id="mask-canvas"></canvas></div>
+                <div id="canvas-wrap" class="canvas-wrap hidden"><img id="source-image" draggable="false"><canvas id="mask-canvas"></canvas><canvas id="region-canvas" class="region-canvas"></canvas></div>
               </div>
-              <div class="canvas-footer"><span id="mask-status">红色表示允许编辑</span><span>Ctrl + 滚轮缩放 · B 画笔 · E 橡皮</span></div>
+              <div class="canvas-footer"><span id="mask-status">琥珀=可修露底 · 红=不确定 · 深红斜线=不可复原</span><span>Ctrl + 滚轮缩放 · B 画笔 · E 橡皮</span></div>
             </div>
 
             <div id="results-view" class="view-panel results-panel">
@@ -57,26 +57,78 @@
               <div class="comparison-toolbar"><select id="comparison-mode"><option value="compare">滑动对照</option><option value="result">修复结果</option><option value="difference">修改差异</option></select><span>原图</span><input id="compare-range" type="range" min="0" max="100" value="50"><span>候选</span><span id="candidate-device" class="muted"></span></div>
               <div id="comparison-stage" class="comparison-stage"><div class="empty-inline">选择候选查看结果</div></div>
               <div id="candidate-metrics" class="metrics-line">掩膜外像素保持不变；工程评分不代表历史真实性。</div>
-              <div class="review-row"><input id="review-note" maxlength="2000" placeholder="复核意见（选填）"><button class="button primary" data-action="select-candidate" disabled>选定候选</button><button class="button" data-action="save-result" disabled>保存图片</button><button class="button" data-action="export-archive" disabled>导出档案</button></div>
+              <div id="observe-preview" class="observe-preview hidden">
+                <div class="observe-heading"><strong>比赛观察标注</strong><span class="muted">不含补绘成图 · 仅原图+风险层</span></div>
+                <div class="observe-media">
+                  <figure><img id="observe-overlay" alt="风险标注叠加"><figcaption>三色风险叠加</figcaption></figure>
+                  <figure><img id="observe-compare" alt="原图与标注对照"><figcaption>原图 | 标注对照</figcaption></figure>
+                  <figure class="observe-legend"><img id="observe-legend" alt="图例"><figcaption>图例</figcaption></figure>
+                </div>
+                <div id="observe-regions" class="observe-regions"></div>
+                <p id="observe-export-note" class="observe-export-note">仅标注层 + 复核记录 + 说明，不含修复成图。</p>
+              </div>
+              <div id="demo-risk-banner" class="risk-banner hidden" role="status"></div>
+              <div id="gate-status-banner" class="risk-banner soft hidden" role="status"></div>
+              <div id="gate-checklist" class="review-row decision-row gate-checklist hidden">
+                <span class="field-label">三色核对（观察）</span>
+                <label class="check-row compact"><input id="check-repairable" type="checkbox"><span>repairable（橙）已核</span></label>
+                <label class="check-row compact"><input id="check-uncertainty" type="checkbox"><span>uncertainty（红）已核</span></label>
+                <label class="check-row compact"><input id="check-unrestorable" type="checkbox"><span>unrestorable（红斜线）已核</span></label>
+                <label class="check-row compact"><input id="check-literature" type="checkbox"><span>文献已核 / 待查已标</span></label>
+              </div>
+              <div class="review-row decision-row">
+                <span class="field-label">人工复核（硬门槛）</span>
+                <label class="check-row compact"><input type="radio" name="review-decision" value="adopt"><span>采纳</span></label>
+                <label class="check-row compact"><input type="radio" name="review-decision" value="modify"><span>修改后采纳</span></label>
+                <label class="check-row compact"><input type="radio" name="review-decision" value="reject"><span>驳回</span></label>
+                <label class="check-row compact"><input type="radio" name="review-decision" value="abstain"><span>拒答（依据不足/禁生成）</span></label>
+              </div>
+              <div class="review-row"><input id="review-note" maxlength="2000" placeholder="复核意见（选填；拒答/驳回建议填写）"><label class="check-row compact"><input id="archive-hypothesis" type="checkbox"><span>仅作假设性建议归档</span></label><button class="button primary" data-action="select-candidate">确认复核决定</button><button class="button subtle" data-action="load-gate-reviewed-sample">演示：已复核可导出</button><button class="button primary" data-action="export-overlay">导出标注对照图</button><button class="button" data-action="export-archive">导出报告档案</button><button class="button lab-only-row" data-action="save-result">保存像素结果（实验）</button></div>
+              <p id="demo-footer" class="demo-footer">辅助观察与方案讨论，不替代专业判断；本流程不含图像生成修复。</p>
             </div>
           </section>
 
           <aside class="inspector">
-            <div class="inspector-section"><div class="section-title"><span>修复方案</span><span id="mask-fraction" class="muted"></span></div>
-              <label class="field-label" for="repair-mode">修复模式</label><select id="repair-mode"><option value="conservative">保守修补</option><option value="evidence">证据辅助重建</option><option value="speculative">推测性补全</option></select>
+            <div class="inspector-section"><div class="section-title"><span>AI 修复助手</span><span id="mask-fraction" class="muted"></span></div>
+              <button class="button primary ai-start-button" data-action="auto-restore" id="auto-button" disabled>AI 分析缺损与文化线索</button>
+              <small id="auto-status" class="field-note">先识别原图已有损伤、描述可见文化线索并生成待确认选区。</small>
+              <section id="culture-summary" class="culture-summary hidden" aria-live="polite"></section>
+              <section class="damage-workflow">
+                <div class="section-title"><span>缺损清单</span><span id="damage-status" class="quiet-badge">待分析</span></div>
+                <div class="action-row"><button class="button" data-action="assess-damage">分析原图缺损</button><button class="button primary" data-action="run-all-defects" disabled>运行全部已确认项</button></div>
+                <div id="damage-list" class="damage-list"><div class="empty-inline">分析后逐项显示缺损和修复建议</div></div>
+                <div id="damage-note" class="notice">AI 识别和类别只是候选；请核对图像证据。仅绿色风险项支持一键运行。</div>
+                <div class="proposal-preview"><img id="damage-image" class="hidden"><div id="damage-empty" class="empty-inline">选中一项查看原图定位</div></div>
+                <button class="button subtle" data-action="refine-damage" disabled>细化选中区域掩膜</button>
+              </section>
+              <label class="check-row"><input id="mask-gate-confirmed" type="checkbox"><span>我已检查并确认红色选区确实需要修复</span></label>
+              <button class="button primary run-button" data-action="run-repair" disabled>按 AI 方案生成修复候选</button>
+              <label class="check-row hidden"><input id="professional-step" type="checkbox" checked><span>AI 待确认工作流</span></label>
+              <details class="advanced-settings"><summary>高级设置与人工修复工具</summary>
+              <div class="advanced-content">
+              <small id="professional-note" class="field-note">开启后：一次只修一块已确认选区；须填写依据与证据等级；一键恢复仅产出候选清单。</small>
+              <div id="demo-step-hint" class="risk-banner soft hidden"></div>
+              <label class="check-row"><input id="force-override" type="checkbox"><span>专家强制放行不确定红区（仅可保守，须写理由）</span></label>
+              <textarea id="force-override-reason" maxlength="2000" rows="2" placeholder="强制放行理由（uncertain 必填）" class="hidden"></textarea>
+              <label class="check-row lab-only-row"><input id="risk-ack" type="checkbox"><span>已知悉风险提示 / 文化边界（内部加强实验用）</span></label>
+              <label class="check-row lab-only-row"><input id="allow-lab-modes" type="checkbox"><span>显示内部实验模式（加强/推测，不进比赛终稿）</span></label>
+              <label class="field-label" for="repair-mode">修复模式</label><select id="repair-mode"><option value="conservative" selected>保守修补（比赛演示主线）</option><option value="enhanced" class="lab-only" disabled>加强修复 · 内部实验（演示禁用）</option><option value="evidence" class="lab-only" disabled>证据辅助 · 内部实验（演示禁用）</option><option value="speculative" class="lab-only" disabled>推测性补全 · 内部实验（演示禁用）</option></select>
+              <label class="field-label" for="evidence-level">证据等级</label><select id="evidence-level"><option value="conservative" selected>conservative · 可执行保守修补</option><option value="observation">observation · 只观察不执行</option><option value="enhanced" class="lab-only" disabled>enhanced · 内部实验（演示禁用）</option><option value="evidence" class="lab-only" disabled>evidence · 内部实验（演示禁用）</option><option value="speculative" class="lab-only" disabled>speculative · 内部实验（演示禁用）</option></select>
               <label class="field-label" for="repair-backend">修复引擎</label><select id="repair-backend"></select>
               <label class="field-label" for="planner">规划方式</label><select id="planner"><option value="rules">本地规则 · 无需密钥</option><option value="local">本地 Qwen3-VL · 无需 API</option><option value="api">视觉 API</option></select><small id="planner-note" class="field-note">本地规则不会发送图像。</small>
               <div class="field-row"><label class="field-label" for="candidate-number">候选数量</label><select id="candidate-number"><option value="1">1 个</option><option value="2" selected>2 个</option><option value="3">3 个</option></select></div>
+              <label class="field-label" for="rationale">修复依据</label><textarea id="rationale" maxlength="2000" rows="2" placeholder="专业分步必填：可见依据、参考来源或专家意见摘要。"></textarea>
+              <label class="field-label" for="expert-notes">专家意见</label><textarea id="expert-notes" maxlength="2000" rows="2" placeholder="修复人员修改建议（为主）；可与依据分开记录。"></textarea>
               <label class="field-label" for="instructions">修复备注</label><textarea id="instructions" maxlength="2000" rows="3" placeholder="例如：保留现有色调，只修补细裂缝。"></textarea>
+              <label class="check-row lab-only-row"><input id="allow-enhanced" type="checkbox"><span>允许加强修复（内部实验；非比赛终稿）</span></label>
               <label class="check-row"><input id="controlnet" type="checkbox" disabled><span>推测模式使用结构控制</span></label>
               <div class="budget-row"><label>修订轮数 <input id="revisions" type="number" min="0" max="2" value="2"></label><label>时间上限 <input id="timeout" type="number" min="10" max="3600" value="300"></label></div>
-              <button class="button primary run-button" data-action="run-repair" disabled>生成修复候选 <span>↗</span></button>
-              <button class="button" data-action="auto-restore" id="auto-button" disabled>AI 一键恢复 · 自动识别与选法</button>
-              <small id="auto-status" class="field-note">由本地 Qwen 自动识别缺损、生成掩膜并规划保守修复；结果仍需人工复核。</small>
               <button class="button cancel-button hidden" data-action="cancel-job">取消当前任务</button>
               <button class="button hidden" data-action="resume-job" id="resume-button">从检查点续跑</button>
+              </div>
+              </details>
             </div>
-            <div class="execution-section"><div class="section-title"><span>执行记录</span><span id="job-status" class="status-text">尚未开始</span></div><div class="progress-track"><span id="job-progress"></span></div><div id="event-log" class="event-log"><div class="empty-log">生成任务后显示规划、工具调用与检查结果。</div></div></div>
+            <div class="execution-section"><div class="section-title"><span>执行进度</span><span class="status-text"><span id="job-status">尚未开始</span> · <b id="job-percent">0%</b></span></div><div class="progress-track"><span id="job-progress"></span></div><div id="progress-estimate" class="progress-estimate">等待任务</div><div id="event-log" class="event-log"><div class="empty-log">生成任务后显示规划、工具调用与检查结果。</div></div></div>
           </aside>
         </div>
       </section>
@@ -85,7 +137,6 @@
         <div class="tools-layout">
           <div class="tools-main">
             <div class="page-intro"><div><h2>辅助工具</h2><p>选区建议需要人工确认；自动分割不等于病害诊断。</p></div></div>
-            <section class="tool-panel"><div class="panel-heading"><div><h3>AI 缺损识别</h3><p>本地 Qwen3-VL 提出疑似缺损框与修复建议；识别、类别和掩膜都需人工确认，不是病害鉴定。</p></div><span id="damage-status" class="quiet-badge">待命</span></div><div class="action-grid"><button class="button" data-action="assess-damage">分析原图缺损</button><button class="button" data-action="refine-damage" disabled>细化选中区域</button></div><div id="damage-list" class="damage-list"><div class="empty-inline">尚未分析</div></div><div id="damage-note" class="notice">AI 识别、类别与掩膜提取都只是候选，需人工检查；不能替代病害鉴定。</div><div class="proposal-preview"><img id="damage-image" class="hidden"><div id="damage-empty" class="empty-inline">红框预览</div></div></section>
             <section class="tool-panel"><div class="panel-heading"><div><h3>辅助选区</h3><p>使用细线分析或 SAM 点/框提示，再检查并应用掩膜。</p></div><span id="sam-status" class="quiet-badge">待命</span></div><div class="action-grid"><button class="button" data-action="propose-damage">分析细线候选</button><button class="button" data-action="sam-point">SAM 点选</button><button class="button" data-action="sam-box">SAM 框选</button><button class="button" data-action="run-sam">执行分割</button><button class="button" data-action="clear-prompts">清除提示</button></div><div id="proposal-note" class="notice">辅助选区还未生成。</div><div class="proposal-preview"><img id="proposal-image" class="hidden"><div id="proposal-empty" class="empty-inline">候选掩膜预览</div></div><div class="action-row"><button class="button" data-action="use-proposal" disabled>替换当前掩膜</button><button class="button" data-action="merge-proposal" disabled>与当前掩膜合并</button></div></section>
             <section class="tool-panel"><div class="panel-heading"><div><h3>参考资料与证据</h3><p>来源和对应关系会记录到修复档案中。</p></div><button class="button" data-action="add-reference">导入参考</button></div><div class="reference-search"><input id="reference-query" placeholder="题材 / 来源关键词"><input id="reference-group" placeholder="壁画分组"><button class="button" data-action="search-references">检索</button></div><div id="reference-list" class="reference-list"><div class="empty-inline">暂无参考资料</div></div><div class="action-row"><button class="button" data-action="register-reference" disabled>配准所选参考</button><button class="button" data-action="approve-reference" disabled>核验应用区域</button></div><div id="registration-note" class="notice">视觉相似不等于历史证据。</div><div id="registration-preview" class="registration-preview"></div></section>
           </div>

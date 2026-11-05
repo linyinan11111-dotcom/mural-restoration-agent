@@ -41,7 +41,7 @@ class Plan(BaseModel):
     steps: list[Step] = Field(min_length=1, max_length=3)
     uncertainty: str = Field(max_length=2000)
     source: str = 'rules'
-    mode: Literal['conservative', 'evidence', 'speculative'] = 'conservative'
+    mode: Literal['conservative', 'enhanced', 'evidence', 'speculative'] = 'conservative'
     regions: list[Region] = Field(default_factory=list, max_length=30)
     evidence: list[str] = Field(default_factory=list, max_length=20)
     budget: Budget = Field(default_factory=Budget)
@@ -84,6 +84,33 @@ def rule_plan(backend, count, fraction):
                 observations=[f'用户圈选区域占图像 {fraction:.2%}。', '当前版本依赖人工掩膜，未自动确认病害类型。'],
                 steps=steps,
                 uncertainty='缺少历史真值，补全结果是图像修补建议。大面积语义缺失需参考资料与人工复核。')
+
+
+def diversify_repair_methods(plan, backend, count, available, include_reference=False):
+    """Ensure conservative comparison candidates use distinct inpainting methods."""
+    if backend not in {'opencv', 'lama', 'telea', 'ns'} or count < 2:
+        return plan
+    preferred = (['lama', 'telea', 'ns'] if backend == 'lama' else
+                 ['ns', 'telea', 'lama'] if backend == 'ns' else
+                 ['telea', 'ns', 'lama'])
+    if include_reference:
+        preferred.insert(1, 'reference')
+    methods = [tool for tool in preferred if tool != 'lama' or available.get('lama')]
+    if len(methods) < 2:
+        return plan
+    source_steps = {step.tool: step for step in plan.steps}
+    labels = {'lama': 'LaMa 纹理补全', 'telea': 'Telea 快速行进法',
+              'ns': 'Navier–Stokes 边缘传播', 'reference': '已核验同壁画参考转移'}
+    varied = []
+    for index, tool in enumerate(methods[:count]):
+        source = source_steps.get(tool)
+        varied.append(source.model_copy(update={
+            'reason': f'方法对照候选 {index + 1}：{labels[tool]}，独立从原图修复。',
+        }) if source else Step(tool=tool, radius=3 if tool not in {'ns', 'reference'} else 4,
+                               reason=f'方法对照候选 {index + 1}：{labels[tool]}，独立从原图修复。'))
+    plan.steps = varied
+    plan.summary = (plan.summary + ' 候选采用不同算法，便于直接比较。')[:2000]
+    return plan
 
 
 def data_url(image: Image.Image):

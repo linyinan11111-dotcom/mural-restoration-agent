@@ -5,6 +5,9 @@ pipeline refines each box into a mask, unions the accepted regions, routes each
 region to a conservative repair tool and starts one bounded job. Nothing here is
 an authority: every box, mask and tool choice is stored on the job/archive so a
 human can inspect, edit the mask and re-run, or discard the result.
+
+In ``professional_step`` workflow, only candidate regions/proposals are produced;
+no merged mask is auto-confirmed and no repair job is enqueued.
 """
 from io import BytesIO
 
@@ -160,8 +163,28 @@ def summary_for(items, routes, fraction, backend):
             f'建议 {tools}（主引擎 {backend}）。识别、掩膜与工具均为候选，须人工复核。')
 
 
-def auto_restore(store, engine, image_record, min_confidence=MIN_CONFIDENCE, max_items=MAX_ITEMS):
-    """Run the full autonomous proposal and create one bounded conservative job."""
+def context_instructions(context):
+    """Pass unverified visual context to the repair planner as cautious constraints."""
+    if not isinstance(context, dict):
+        return ''
+    lines = ['文化背景为 Qwen 视觉假设，未经文献或专家核实；不得作为历史事实。']
+    for key, label in (('visible_subject', '可见题材'),
+                       ('possible_period_or_tradition', '可能年代/传统（待核）')):
+        value = str(context.get(key, '')).strip()
+        if value:
+            lines.append(f'{label}：{value}')
+    for key, label in (('visual_clues', '可见线索'),
+                       ('preservation_constraints', '保护约束'),
+                       ('verification_needed', '待查证')):
+        values = context.get(key) or []
+        if isinstance(values, list) and values:
+            lines.append(f'{label}：' + '；'.join(str(value) for value in values[:5]))
+    lines.append('不得擦除或臆造人物、题记、宗教符号、纹样及颜料边界；证据不足时只做最小保守修补。')
+    return '\n'.join(lines)[:2000]
+
+
+def _collect_proposals(store, engine, image_record, min_confidence=MIN_CONFIDENCE, max_items=MAX_ITEMS):
+    """Shared assess → refine → merge path used by auto and professional propose."""
     assessment = assess_image(engine, image_record)
     limitations = validate_assessment(assessment)
     selected = select_items(assessment.get('items', []), min_confidence, max_items)
@@ -188,26 +211,179 @@ def auto_restore(store, engine, image_record, min_confidence=MIN_CONFIDENCE, max
     steps = build_steps(accepted_items, accepted_routes)
 
     proposal_ids = []
+    proposals = []
+    defects = []
     for index, item_index in enumerate(accepted):
         proposal_id = new_id()
         folder = store.folder(proposal_id)
         Image.fromarray(masks[item_index]).save(folder / 'mask.png')
         Image.fromarray(masks[item_index]).save(folder / 'proposal.png')
-        store.put('proposal', {'id': proposal_id, 'image_id': image_record['id'],
-                               'created_at': timestamp(), 'metadata': metadata_list[item_index],
-                               'adopted': False, 'confirmed': False})
+        meta = dict(metadata_list[item_index])
+        meta['recommendation'] = dict(accepted_routes[index])
+        method = str(meta.get('method', '')).lower()
+        if accepted_items[index].get('type') == 'crack' and 'fallback' not in method:
+            meta['mask_source'] = 'crack'
+        elif 'sam' in method:
+            meta['mask_source'] = 'sam'
+        else:
+            meta['mask_source'] = 'ai_candidate'
+        meta['confirmed'] = False
+        # Heuristic risk class per proposal (competition: label, do not generate).
+        try:
+            from .risk_regions import classify_mask_regions, aggregate_region_class
+            risk = classify_mask_regions(image, masks[item_index])
+            meta['region_class'] = risk['region_class']
+            meta['risk_regions'] = risk['regions']
+            meta['risk_notice'] = risk['notice']
+            meta['repair_allowed'] = not risk['blocking']
+        except Exception as exc:  # noqa: BLE001 — keep proposal even if heuristic fails
+            meta['region_class'] = 'uncertain'
+            meta['risk_regions'] = []
+            meta['risk_notice'] = f'风险分类失败，默认标不确定：{str(exc)[:120]}'
+            meta['repair_allowed'] = False
+        record = store.put('proposal', {'id': proposal_id, 'image_id': image_record['id'],
+                                        'created_at': timestamp(), 'metadata': meta,
+                                        'adopted': False, 'confirmed': False,
+                                        'mask_source': meta['mask_source'],
+                                        'region_class': meta.get('region_class', 'uncertain'),
+                                        'repair_allowed': bool(meta.get('repair_allowed', False))})
         proposal_ids.append(proposal_id)
+        proposals.append(record)
+        defect = dict(accepted_items[index])
+        defect['proposal_id'] = proposal_id
+        defect['recommendation'] = dict(accepted_routes[index])
+        defect['repair_allowed'] = bool(meta.get('repair_allowed', False))
+        defect['region_class'] = meta.get('region_class', 'uncertain')
+        defect['risk_notice'] = meta.get('risk_notice', '') if not meta.get('repair_allowed') else ''
+        defect['confirmed'] = False
+        defects.append(defect)
+
+    paired = {(item.get('type'), tuple(item.get('bbox') or [])) for item in accepted_items}
+    omitted = {}
+    for item in assessment.get('items', []):
+        key = (item.get('type'), tuple(item.get('bbox') or []))
+        if key in paired or key in omitted:
+            continue
+        if key not in {(candidate.get('type'), tuple(candidate.get('bbox') or [])) for candidate in selected}:
+            omitted[key] = '置信度或区域尺寸未达到自动细化门槛'
+        else:
+            omitted[key] = '独立掩膜未通过面积限制，需手工确认选区'
+    for item in assessment.get('items', []):
+        key = (item.get('type'), tuple(item.get('bbox') or []))
+        if key not in omitted:
+            continue
+        defect = dict(item)
+        defect['proposal_id'] = None
+        defect['recommendation'] = route_items([item], available)[0]
+        defect['repair_allowed'] = False
+        defect['region_class'] = 'uncertainty'
+        defect['risk_notice'] = omitted.pop(key)
+        defect['confirmed'] = False
+        defects.append(defect)
 
     fraction = float((union > 0).mean())
     if fraction < MIN_MASK_FRACTION:
         raise ValueError('AI 候选掩膜过小（低于图像 0.05%），未自动提交；请改用手动画选。')
-    mask_record = workspace.add_mask(store, image_record, png_bytes(union), proposal_ids)
     summary = summary_for(accepted_items, accepted_routes, fraction, backend)
-    job = workspace.create_job(store, engine, image_record, mask_record, backend, 'auto', len(steps),
-        summary, mode='conservative', budget={'candidates': len(steps), 'revisions': 1, 'timeout_seconds': 300},
-        auto={'items': accepted_items, 'routes': accepted_routes, 'steps': steps,
-              'backend': backend, 'mask_fraction': fraction,
-              'limitations': limitations[:1000],
-              'summary': summary})
-    return {'mask': mask_record, 'job': job, 'items': accepted_items, 'routes': accepted_routes,
-            'steps': steps, 'backend': backend, 'summary': summary}
+    cultural_context = assessment.get('cultural_context') or {}
+    return {
+        'assessment': assessment,
+        'cultural_context': cultural_context,
+        'planning_notes': context_instructions(cultural_context),
+        'limitations': limitations,
+        'accepted_items': accepted_items,
+        'accepted_routes': accepted_routes,
+        'backend': backend,
+        'steps': steps,
+        'proposal_ids': proposal_ids,
+        'proposals': proposals,
+        'defects': defects,
+        'masks': masks,
+        'accepted': accepted,
+        'union': union,
+        'fraction': fraction,
+        'summary': summary,
+        'available': available,
+    }
+
+
+def propose_restore(store, engine, image_record, min_confidence=MIN_CONFIDENCE, max_items=MAX_ITEMS):
+    """Professional step path: list refined candidates for expert confirmation only."""
+    collected = _collect_proposals(store, engine, image_record, min_confidence, max_items)
+    # Unconfirmed preview mask for UI overlay; cannot create_job until user confirms.
+    from .risk_regions import classify_mask_regions, aggregate_region_class
+    image = None
+    try:
+        from .imaging import image_array
+        image = image_array(store.folder(image_record['id']) / 'image.png')
+        risk = classify_mask_regions(image, collected['union'])
+        region_class = risk['region_class']
+        risk_regions = risk['regions']
+        risk_notice = risk['notice']
+    except Exception as exc:  # noqa: BLE001
+        region_class = aggregate_region_class(
+            [p.get('region_class') for p in collected['proposals']])
+        risk_regions = []
+        risk_notice = f'整体风险分类降级：{str(exc)[:120]}'
+        risk = {'blocking': region_class in {'uncertain', 'unrestorable'}, 'class_masks': {}}
+    mask_record = workspace.add_mask(
+        store, image_record, png_bytes(collected['union']), collected['proposal_ids'],
+        mask_source='ai_candidate', user_confirmed=False,
+        region_class=region_class, risk_regions=risk_regions, expert_force_override=False)
+    summary = ('专业分步：仅产出候选选区与风险标红，未自动执行修复，禁止生成纹样/图像。'
+               '请逐块「确认可填 / 标不确定 / 拒答跳过」后再决定是否保守填补。'
+               + ' ' + collected['summary'] + ' ' + risk_notice)
+    return {
+        'mask': mask_record,
+        'job': None,
+        'items': collected['accepted_items'],
+        'defects': collected['defects'],
+        'routes': collected['accepted_routes'],
+        'steps': collected['steps'],
+        'backend': collected['backend'],
+        'summary': summary,
+        'cultural_context': collected['cultural_context'],
+        'planning_notes': collected['planning_notes'],
+        'proposals': collected['proposals'],
+        'workflow': 'professional_step',
+        'awaiting_confirmation': True,
+        'risk': {
+            'region_class': region_class,
+            'regions': risk_regions,
+            'blocking': bool(risk.get('blocking')),
+            'notice': risk_notice,
+        },
+    }
+
+
+def auto_restore(store, engine, image_record, min_confidence=MIN_CONFIDENCE, max_items=MAX_ITEMS,
+                 workflow='standard'):
+    """Run autonomous proposal; professional_step stops before job creation."""
+    from .professional import WORKFLOW_PROFESSIONAL, normalize_workflow
+    workflow = normalize_workflow(workflow)
+    if workflow == WORKFLOW_PROFESSIONAL:
+        return propose_restore(store, engine, image_record, min_confidence, max_items)
+
+    collected = _collect_proposals(store, engine, image_record, min_confidence, max_items)
+    mask_record = workspace.add_mask(
+        store, image_record, png_bytes(collected['union']), collected['proposal_ids'],
+        mask_source='ai_candidate', user_confirmed=True)
+    summary = collected['summary']
+    job = workspace.create_job(
+        store, engine, image_record, mask_record, collected['backend'], 'auto',
+        len(collected['steps']), summary, mode='conservative',
+        budget={'candidates': len(collected['steps']), 'revisions': 1, 'timeout_seconds': 300},
+        auto={'items': collected['accepted_items'], 'routes': collected['accepted_routes'],
+              'steps': collected['steps'], 'backend': collected['backend'],
+              'mask_fraction': collected['fraction'],
+              'cultural_context': collected['cultural_context'],
+              'planning_notes': collected['planning_notes'],
+              'limitations': collected['limitations'][:1000], 'summary': summary},
+        workflow='standard', rationale=summary, evidence_level='conservative',
+        expert_notes=collected['planning_notes'], mask_source='ai_candidate')
+    return {'mask': mask_record, 'job': job, 'items': collected['accepted_items'],
+            'defects': collected['defects'],
+            'routes': collected['accepted_routes'], 'steps': collected['steps'],
+            'backend': collected['backend'], 'summary': summary,
+            'cultural_context': collected['cultural_context'],
+            'planning_notes': collected['planning_notes']}

@@ -534,6 +534,7 @@ class MainWindow(FeatureMixin, QMainWindow):
         controls.addSpacing(8)
         self.mode = QComboBox()
         self.mode.addItem('保守修补', 'conservative')
+        self.mode.addItem('加强修复', 'enhanced')
         self.mode.addItem('证据辅助重建', 'evidence')
         self.mode.addItem('推测性补全', 'speculative')
         controls.addWidget(self.mode)

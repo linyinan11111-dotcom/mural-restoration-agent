@@ -41,6 +41,7 @@ class Bridge(QObject):
         self.aux_future = None
         self.aux_version = 0
         self.current_image_id = None
+        self._gate_reviews = {}
 
     def _result(self, function):
         try:
@@ -160,6 +161,229 @@ class Bridge(QObject):
             return self._image(record)
         return self._result(action)
 
+    def _competition_demo_dir(self):
+        candidates = [
+            ROOT / 'data' / 'demo_competition',
+            Path(__file__).resolve().parent.parent / 'data' / 'demo_competition',
+            Path.cwd() / 'data' / 'demo_competition',
+        ]
+        for path in candidates:
+            if (path / 'source.jpg').exists() and (path / 'regions.json').exists():
+                return path.resolve()
+        raise ValueError('未找到比赛观察包 data/demo_competition（需要 source.jpg 与 regions.json）。')
+
+    @Slot(result=str)
+    def loadCompetitionDemo(self):
+        # Observe-only competition pack: source + risk overlay meta, no generative repair.
+        def action():
+            pack = self._competition_demo_dir()
+            source = pack / 'source.jpg'
+            record = workspace.add_image(
+                self.store, source.read_bytes(),
+                '比赛观察包 · 侧面天人残片（观察标注，非生成）.jpg')
+            self.current_image_id = record['id']
+            folder = self.store.folder(record['id'])
+            urls = {}
+            for name in ('overlay_risk.png', 'compare_source_overlay.png', 'legend.png', 'regions.json'):
+                src = pack / name
+                if not src.exists():
+                    continue
+                dest = folder / name
+                shutil.copy2(src, dest)
+                if name.endswith('.json'):
+                    continue
+                urls[name] = self._file_url(dest)
+            regions_payload = {}
+            regions_path = folder / 'regions.json'
+            if regions_path.exists():
+                regions_payload = json.loads(regions_path.read_text(encoding='utf-8'))
+            result = self._image(record)
+            result['observe'] = {
+                'policy': regions_payload.get('policy', 'competition_observe_only'),
+                'no_generative_mural': True,
+                'overlay_risk_url': urls.get('overlay_risk.png'),
+                'compare_url': urls.get('compare_source_overlay.png'),
+                'legend_url': urls.get('legend.png'),
+                'regions': regions_payload.get('regions', []),
+                'legend': regions_payload.get('legend', {}),
+                'notice': regions_payload.get('notice', ''),
+                'risk_note': '红区禁绘；AI 标注非病害鉴定结论。',
+                'export_note': '仅标注层 + 复核记录 + 说明，不含修复成图。',
+            }
+            # Start observe gate from pending sample (all pending → blocked).
+            from . import human_gate as hg
+            try:
+                gate_doc = hg.load_sample('sample-from-shibi-pending', root=ROOT)
+            except FileNotFoundError:
+                gate_doc = {
+                    'run_id': f"observe-{record['id'][:8]}",
+                    'stage': 'observe',
+                    'request_flags': {'wants_generative_restore': False},
+                    'candidates': [],
+                    'reviewer': {'role': '文物修复人员', 'name': '', 'confirmed': False, 'confirmed_at': ''},
+                }
+                for region in regions_payload.get('regions', []):
+                    klass = region.get('class') or region.get('class_alias') or 'uncertainty'
+                    unc = {'repairable': 'medium', 'uncertainty': 'high', 'unrestorable': 'irrecoverable'}.get(klass, 'high')
+                    gate_doc['candidates'].append({
+                        'id': region.get('id'),
+                        'kind': 'damage_annotation',
+                        'region_kind': klass,
+                        'bbox_xywh': region.get('bbox_xywh') or region.get('bbox') or [],
+                        'evidence': region.get('evidence') or '',
+                        'uncertainty': unc,
+                        'decision': 'pending',
+                        'correction_note': '',
+                        'reject_reason': '',
+                    })
+                gate_doc = hg.apply_evaluate(gate_doc)
+            gate_doc = hg.apply_evaluate(gate_doc)
+            self._gate_reviews[record['id']] = gate_doc
+            payload = hg.response_payload(gate_doc)
+            result['gate_review'] = gate_doc
+            result['gate'] = payload['gate']
+            result['export_allowed'] = payload['export_allowed']
+            result['banner'] = payload['banner']
+            result['observe']['gate'] = payload['gate']
+            result['observe']['export_allowed'] = payload['export_allowed']
+            result['observe']['banner'] = payload['banner']
+            return result
+        return self._result(action)
+
+    @Slot(str, str, result=str)
+    def applyGateReview(self, image_id, review_json):
+        """Apply observe-mode human decisions and re-evaluate gate/export_allowed."""
+        def action():
+            from . import human_gate as hg
+            if not self.store.get('image', image_id):
+                raise ValueError('图像记录不存在。')
+            payload = json.loads(review_json) if review_json else {}
+            doc = self._gate_reviews.get(image_id)
+            if not doc:
+                try:
+                    doc = hg.load_sample('sample-from-shibi-pending', root=ROOT)
+                except FileNotFoundError as exc:
+                    raise ValueError('尚无门禁复核文档，请先载入比赛观察包。') from exc
+            sample = payload.get('sample')
+            if sample:
+                doc = hg.load_sample(str(sample), root=ROOT)
+                doc = hg.apply_evaluate(doc)
+                self._gate_reviews[image_id] = doc
+                out = hg.response_payload(doc)
+                self.notify.emit(out['banner'])
+                return out
+            ui_decision = payload.get('decision') or payload.get('ui_decision')
+            checklist = payload.get('checklist') or {}
+            note = payload.get('note') or payload.get('review_note') or ''
+            reviewer_name = payload.get('reviewer_name') or payload.get('name') or ''
+            candidate_ids = payload.get('candidate_ids')
+            confirm = payload.get('confirm', True)
+            doc = hg.apply_bulk_decision(
+                doc,
+                ui_decision=ui_decision,
+                note=note,
+                checklist=checklist,
+                reviewer_name=reviewer_name,
+                confirm=bool(confirm),
+                candidate_ids=candidate_ids,
+            )
+            self._gate_reviews[image_id] = doc
+            # Persist review record beside image folder for archive export.
+            folder = self.store.folder(image_id)
+            (folder / 'gate_review.json').write_text(
+                json.dumps(doc, ensure_ascii=False, indent=2), encoding='utf-8')
+            out = hg.response_payload(doc)
+            self.notify.emit(out['banner'])
+            return out
+        return self._result(action)
+
+    @Slot(str, result=str)
+    def loadGateSample(self, sample_name):
+        """Load pending/reviewed sample for click-through demo (labeled as sample)."""
+        def action():
+            from . import human_gate as hg
+            image_id = self.current_image_id
+            if not image_id:
+                raise ValueError('请先载入比赛观察包。')
+            doc = hg.load_sample(sample_name or 'sample-from-shibi-reviewed', root=ROOT)
+            doc = hg.apply_evaluate(doc)
+            self._gate_reviews[image_id] = doc
+            out = hg.response_payload(doc)
+            out['sample'] = sample_name or 'sample-from-shibi-reviewed'
+            self.notify.emit('已载入样例复核状态（演示）：' + out['banner'])
+            return out
+        return self._result(action)
+
+    @Slot(str, result=str)
+    def exportObserveAnnotation(self, image_id):
+        """Export annotation overlay only when gate allows annotation_layer."""
+        def action():
+            from . import human_gate as hg
+            image = self.store.get('image', image_id)
+            if not image:
+                raise ValueError('图像记录不存在。')
+            doc = self._gate_reviews.get(image_id) or {}
+            export = (doc.get('export_allowed') or {})
+            gate = (doc.get('gate') or {})
+            if gate.get('blocked') or not export.get('annotation_layer'):
+                raise ValueError('门禁未放行：不能导出标注层。请完成人工复核（pending/不可复原未处理会阻断）。')
+            if export.get('restored_image'):
+                raise ValueError('比赛禁止导出修复成图。')
+            folder = self.store.folder(image_id)
+            overlay = folder / 'overlay_risk.png'
+            compare = folder / 'compare_source_overlay.png'
+            source = overlay if overlay.exists() else compare
+            if not source.exists():
+                raise ValueError('未找到观察标注图，请先载入比赛观察包。')
+            path, _ = QFileDialog.getSaveFileName(
+                None, '导出标注对照图', f'mural-annotation-{image_id[:8]}.png', 'PNG 图像 (*.png)')
+            if path:
+                shutil.copy2(source, path)
+                # Also drop review json next to it when allowed
+                if export.get('review_record') and doc:
+                    side = Path(path).with_suffix('.gate_review.json')
+                    side.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding='utf-8')
+                self.notify.emit('标注对照图已导出（不含修复成图）。')
+            return {'saved': bool(path), 'restored_image': False}
+        return self._result(action)
+
+    @Slot(str, result=str)
+    def exportObserveReview(self, image_id):
+        """Export review record JSON/ZIP when gate allows review_record."""
+        def action():
+            image = self.store.get('image', image_id)
+            if not image:
+                raise ValueError('图像记录不存在。')
+            doc = self._gate_reviews.get(image_id) or {}
+            export = (doc.get('export_allowed') or {})
+            gate = (doc.get('gate') or {})
+            if gate.get('blocked') or not export.get('review_record'):
+                raise ValueError('门禁未放行：不能导出复核记录。')
+            if export.get('restored_image'):
+                raise ValueError('比赛禁止导出修复成图。')
+            folder = self.store.folder(image_id)
+            path, _ = QFileDialog.getSaveFileName(
+                None, '导出观察复核档案', f'mural-observe-review-{image_id[:8]}.zip', 'ZIP 档案 (*.zip)')
+            if not path:
+                return {'saved': False, 'restored_image': False}
+            import zipfile
+            with zipfile.ZipFile(path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr('gate_review.json', json.dumps(doc, ensure_ascii=False, indent=2))
+                for name in ('overlay_risk.png', 'compare_source_overlay.png', 'legend.png', 'regions.json', 'gate_review.json'):
+                    src = folder / name
+                    if src.exists():
+                        zf.write(src, arcname=name)
+                readme = (
+                    '拾壁比赛观察导出\n'
+                    '- 仅含标注层 + 复核记录 + 说明\n'
+                    '- restored_image=false：不含修复成图\n'
+                    '- AI 标注非病害鉴定结论\n'
+                )
+                zf.writestr('README.txt', readme)
+            self.notify.emit('观察复核档案已导出（不含修复成图）。')
+            return {'saved': True, 'restored_image': False}
+        return self._result(action)
+
     @Slot(str, str, str, result=str)
     def saveMask(self, image_id, data, proposal_ids):
         def action():
@@ -168,7 +392,10 @@ class Bridge(QObject):
             if not image:
                 raise ValueError('图像记录不存在。')
             self.current_image_id = image_id
-            mask = workspace.add_mask(self.store, image, payload, json.loads(proposal_ids))
+            # Desktop save after brush/edit is always an expert-confirmed mask.
+            ids = json.loads(proposal_ids) if proposal_ids else []
+            source = 'ai_candidate' if ids else 'manual'
+            mask = workspace.add_mask(self.store, image, payload, ids, mask_source=source, user_confirmed=True)
             return {**mask, 'file_url': self._file_url(self.store.folder(mask['id']) / 'mask.png')}
         return self._result(action)
 
@@ -180,10 +407,25 @@ class Bridge(QObject):
             mask = self.store.get('mask', request['mask_id'])
             if not image or not mask:
                 raise ValueError('图像或掩膜不存在。')
-            job = workspace.create_job(self.store, self.engine, image, mask, request['backend'], request['planner'],
-                int(request['candidate_count']), request.get('instructions', ''), request.get('mode', 'conservative'),
-                request.get('registration_id'), request.get('budget'), request.get('structure_control', False),
-                request.get('quality_thresholds'))
+            job = workspace.create_job(
+                self.store, self.engine, image, mask, request['backend'], request['planner'],
+                int(request['candidate_count']), request.get('instructions', ''),
+                request.get('mode', 'conservative'), request.get('registration_id'),
+                request.get('budget'), request.get('structure_control', False),
+                request.get('quality_thresholds'),
+                workflow=request.get('workflow', 'standard'),
+                rationale=request.get('rationale', ''),
+                evidence_level=request.get('evidence_level'),
+                expert_notes=request.get('expert_notes', ''),
+                mask_source=request.get('mask_source') or mask.get('mask_source'),
+                allow_enhanced=bool(request.get('allow_enhanced')),
+                risk_acknowledged=bool(request.get('risk_acknowledged')),
+                mask_gate_confirmed=bool(request.get('mask_gate_confirmed')),
+                has_unrestorable=bool(request.get('has_unrestorable')),
+                has_uncertain=bool(request.get('has_uncertain')),
+                force_override=bool(request.get('force_override')),
+                force_override_reason=request.get('force_override_reason') or '',
+                contest_demo=request.get('contest_demo', True))
             return self._job(job)
         return self._result(action)
 
@@ -198,20 +440,44 @@ class Bridge(QObject):
     @Slot(str, str, str, result=str)
     def selectCandidate(self, job_id, candidate_id, note):
         def action():
+            from .professional import validate_candidate_selection
             job = self.store.get('job', job_id)
             if not job or candidate_id not in [item['id'] for item in job['candidates']]:
                 raise ValueError('候选不属于当前任务。')
             if job['status'] in {'queued', 'planning', 'running', 'evaluating'}:
                 raise ValueError('任务完成前不能选定候选。')
+            archive_as_hypothesis = False
+            review_note = note
+            decision = None
+            if isinstance(note, str) and note.strip().startswith('{'):
+                try:
+                    payload = json.loads(note)
+                    if isinstance(payload, dict):
+                        archive_as_hypothesis = bool(payload.get('archive_as_hypothesis'))
+                        review_note = payload.get('note', '')
+                        decision = payload.get('decision')
+                except json.JSONDecodeError:
+                    pass
+            candidate = next(item for item in job['candidates'] if item['id'] == candidate_id)
+            selection = validate_candidate_selection(
+                job, candidate, archive_as_hypothesis=archive_as_hypothesis,
+                decision=decision)
             # An empty box must not erase a note restored from the archive/archive history.
-            review_note = note.strip()[:2000] or (job.get('review') or {}).get('note', '')
-            return self._job(self.store.update('job', job_id, selected_id=candidate_id,
-                review={'note': review_note, 'time': timestamp()}))
+            review_note = str(review_note).strip()[:2000] or (job.get('review') or {}).get('note', '')
+            return self._job(self.store.update(
+                'job', job_id, selected_id=candidate_id, selected_as=selection['selected_as'],
+                review={'note': review_note, 'time': timestamp(),
+                        'archive_as_hypothesis': selection['archive_as_hypothesis'],
+                        'decision': selection.get('decision')}))
         return self._result(action)
 
     @Slot(str, result=str)
     def saveResult(self, candidate_id):
         def action():
+            from .professional import contest_allows_pixel_export
+            job = next((j for j in self.store.list('job') if any(c.get('id') == candidate_id for c in j.get('candidates') or [])), None)
+            if job and not contest_allows_pixel_export(job):
+                raise ValueError('比赛演示禁止导出生成性补绘终稿；请导出标注对照图或报告档案。')
             path, _ = QFileDialog.getSaveFileName(None, '保存修复结果', 'restored.png', 'PNG 图像 (*.png)')
             if path:
                 shutil.copy2(self.store.folder(candidate_id) / 'result.png', path)
@@ -222,6 +488,11 @@ class Bridge(QObject):
     @Slot(str, result=str)
     def exportArchive(self, job_id):
         def action():
+            from .professional import contest_allows_pixel_export
+            job = self.store.get('job', job_id)
+            # Archive still allowed (report), but warn if generative selection.
+            if job and not contest_allows_pixel_export(job):
+                self.notify.emit('提示：生成性结果不作为比赛终稿；档案仅供内部实验记录。')
             path, _ = QFileDialog.getSaveFileName(None, '导出修复档案', f'mural-{job_id[:8]}.zip', 'ZIP 档案 (*.zip)')
             if path:
                 source = self.engine.export(job_id)
@@ -342,20 +613,107 @@ class Bridge(QObject):
     @Slot(str, result=str)
     def autoRestore(self, image_id):
         def action():
-            image = self.store.get('image', image_id)
+            workflow = 'standard'
+            identifier = image_id
+            if isinstance(image_id, str) and image_id.strip().startswith('{'):
+                try:
+                    payload = json.loads(image_id)
+                    if isinstance(payload, dict):
+                        identifier = payload.get('image_id') or payload.get('id')
+                        workflow = payload.get('workflow', 'standard')
+                except json.JSONDecodeError:
+                    pass
+            image = self.store.get('image', identifier)
             if not image:
                 raise ValueError('图像记录不存在。')
             if not (self.settings.vision_model / 'provenance.json').exists():
                 raise ValueError('AI 一键恢复需要本地 Qwen3-VL 权重，请先安装模型。')
-            self.current_image_id = image_id
+            self.current_image_id = identifier
             from .auto_restore import auto_restore
-            result = auto_restore(self.store, self.engine, image)
-            mask = dict(result['mask'])
-            mask['file_url'] = self._file_url(self.store.folder(mask['id']) / 'mask.png')
-            return {'auto': {'mask': mask, 'job': self._job(result['job']),
+            from .professional import WORKFLOW_PROFESSIONAL, normalize_workflow
+            workflow = normalize_workflow(workflow)
+            busy = ('专业分步：仅识别候选选区供确认…'
+                    if workflow == WORKFLOW_PROFESSIONAL else 'AI 自主识别缺损并生成修复候选…')
+            # Rebind message for _aux by storing on closure via nonlocal pattern below.
+            result = auto_restore(self.store, self.engine, image, workflow=workflow)
+            mask = dict(result['mask']) if result.get('mask') else None
+            if mask:
+                mask['file_url'] = self._file_url(self.store.folder(mask['id']) / 'mask.png')
+            job = result.get('job')
+            return {'auto': {'mask': mask, 'job': self._job(job) if job else None,
                              'items': result['items'], 'steps': result['steps'],
-                             'backend': result['backend'], 'summary': result['summary']}}
-        return self._result(lambda: self._aux(action, 'AI 自主识别缺损并生成修复候选…'))
+                             'defects': result.get('defects') or [],
+                             'backend': result['backend'], 'summary': result['summary'],
+                             'cultural_context': result.get('cultural_context') or {},
+                             'planning_notes': result.get('planning_notes') or '',
+                             'workflow': result.get('workflow', workflow),
+                             'awaiting_confirmation': bool(result.get('awaiting_confirmation')),
+                             'proposals': result.get('proposals') or []},
+                    '_busy_message': busy}
+        def wrapped():
+            # _aux shows a fixed message; keep professional wording via notify after.
+            payload = action()
+            message = payload.pop('_busy_message', None)
+            if message and payload.get('auto', {}).get('awaiting_confirmation'):
+                self.notify.emit(payload['auto'].get('summary') or message)
+            return payload
+        return self._result(lambda: self._aux(wrapped, 'AI 自主识别缺损并生成修复候选…'))
+
+    @Slot(str, result=str)
+    def runDefectRepairs(self, request_json):
+        def action():
+            request = json.loads(request_json)
+            if not request.get('confirmed'):
+                raise ValueError('请先逐项检查并勾选确认，再启动修复。')
+            image_id = request.get('image_id')
+            image = self.store.get('image', image_id)
+            if not image:
+                raise ValueError('图像记录不存在。')
+            proposal_ids = list(dict.fromkeys(request.get('proposal_ids') or []))
+            if not proposal_ids:
+                raise ValueError('没有已确认的缺损项。')
+            jobs, skipped = [], []
+            for proposal_id in proposal_ids:
+                proposal = self.store.get('proposal', proposal_id)
+                if not proposal or proposal.get('image_id') != image_id:
+                    skipped.append({'proposal_id': proposal_id, 'reason': '提案不存在或不属于当前图像'})
+                    continue
+                prior_job = self.store.get('job', proposal.get('repair_job_id')) if proposal.get('repair_job_id') else None
+                if prior_job and prior_job.get('status') not in {'failed', 'cancelled'}:
+                    skipped.append({'proposal_id': proposal_id, 'reason': '该缺损项已有修复任务'})
+                    continue
+                meta = proposal.get('metadata') or {}
+                region_class = proposal.get('region_class') or meta.get('region_class') or 'uncertain'
+                if not proposal.get('repair_allowed') or region_class != 'repairable':
+                    skipped.append({'proposal_id': proposal_id, 'reason': meta.get('risk_notice') or '风险分类禁止一键修复'})
+                    continue
+                route = meta.get('recommendation') or {}
+                backend = route.get('backend')
+                if backend not in {'opencv', 'telea', 'ns', 'lama', 'color'}:
+                    skipped.append({'proposal_id': proposal_id, 'reason': '没有可用的保守推荐方法'})
+                    continue
+                method = str(route.get('method') or '保守局部修补')
+                item_type = str(meta.get('type') or '疑似缺损')
+                mask = workspace.add_mask(
+                    self.store, image, (self.store.folder(proposal_id) / 'mask.png').read_bytes(),
+                    [proposal_id], mask_source=proposal.get('mask_source') or 'ai_candidate',
+                    user_confirmed=True, region_class=region_class,
+                    risk_regions=meta.get('risk_regions') or [])
+                rationale = f"人工确认的{item_type}候选；按 AI 建议采用{method}。仅供修复人员复核，不作为历史定稿。"
+                job = workspace.create_job(
+                    self.store, self.engine, image, mask, backend, 'rules', 1,
+                    rationale + ' ' + str(meta.get('evidence') or ''), mode='conservative',
+                    budget={'candidates': 1, 'revisions': 0, 'timeout_seconds': 300},
+                    workflow='professional_step', rationale=rationale,
+                    evidence_level='conservative', expert_notes=str(meta.get('risk_notice') or ''),
+                    mask_source=proposal.get('mask_source') or 'ai_candidate',
+                    mask_gate_confirmed=True, contest_demo=True)
+                job = self.store.update('job', job['id'], defect_proposal_id=proposal_id,
+                                        defect_type=item_type, recommended_method=method)
+                self.store.update('proposal', proposal_id, confirmed=True, repair_job_id=job['id'])
+                jobs.append(self._job(job))
+            return {'jobs': jobs, 'skipped': skipped}
+        return self._result(action)
 
     @Slot(str, str, result=str)
     def mergeProposal(self, proposal_id, current_mask):

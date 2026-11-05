@@ -153,7 +153,8 @@ def assess_image(engine, image_record):
         "image": str(preview_path),
         "output": str(output_path),
         "prompt": (
-            "Inspect this mural photograph for visible physical deterioration only. "
+            "Inspect this mural photograph for visible physical deterioration and cautiously describe "
+            "its visible cultural context. "
             "Do not label intentional painted outlines, figures, ornament, pigment boundaries, "
             "or the normal edge of a detached fragment as cracks. Report distinct visible candidates "
             "such as cracks, paint loss, plaster loss, flaking, or stains. Use a tight bounding box "
@@ -163,10 +164,20 @@ def assess_image(engine, image_record):
             "This is only a visual proposal, not a conservation diagnosis. It is acceptable to return "
             "no candidates when uncertain. Consolidate continuous or nearby parts of one crack into one item. "
             "Do not repeat the same crack with adjacent boxes; report at most 8 spatially distinct candidates. "
+            "For cultural context, describe only visible subject matter, symbols, clothing, "
+            "inscriptions, pigments, and composition. A possible period or tradition is a hypothesis, "
+            "not a fact: give confidence, list visual clues, and say what needs source verification. "
+            "Never invent an artifact identity, exact date, religion, historical event, or citation. "
+            "State preservation constraints that follow from visible evidence, especially elements "
+            "that must not be erased or reconstructed without references. "
             "Return only JSON exactly shaped as: "
             '{"items":[{"type":"crack|paint_loss|plaster_loss|flaking|stain|other",'
             '"bbox":[0,0,10,10],"size":"small|medium|large|uncertain",'
-            '"confidence":0.0,"evidence":"..."}],"limitations":"..."}. '
+            '"confidence":0.0,"evidence":"..."}],'
+            '"cultural_context":{"visible_subject":"...","possible_period_or_tradition":"...",'
+            '"confidence":"low|medium|high","visual_clues":["..."],'
+            '"verification_needed":["..."],"preservation_constraints":["..."]},'
+            '"limitations":"..."}. '
             "Never invent damage hidden by the photograph."
         ),
     }, ensure_ascii=False), encoding="utf-8")
@@ -212,7 +223,23 @@ def assess_image(engine, image_record):
         except (TypeError, ValueError, KeyError):
             continue
     items = merge_adjacent_candidates(items)
-    return {"items": items, "limitations": str(data.get("limitations", "模型判断不等于病害鉴定。"))[:1000],
+    context = data.get("cultural_context") if isinstance(data.get("cultural_context"), dict) else {}
+    def context_list(key):
+        value = context.get(key, [])
+        if not isinstance(value, list):
+            return []
+        return [str(entry)[:240] for entry in value[:8] if str(entry).strip()]
+    cultural_context = {
+        "visible_subject": str(context.get("visible_subject", "未能可靠辨认"))[:500],
+        "possible_period_or_tradition": str(context.get("possible_period_or_tradition", "未判断"))[:500],
+        "confidence": str(context.get("confidence", "low"))[:20],
+        "visual_clues": context_list("visual_clues"),
+        "verification_needed": context_list("verification_needed"),
+        "preservation_constraints": context_list("preservation_constraints"),
+        "verified": False,
+    }
+    return {"items": items, "cultural_context": cultural_context,
+            "limitations": str(data.get("limitations", "模型判断不等于病害鉴定。"))[:1000],
             "model": "Qwen3-VL local", "confirmed": False}
 
 
@@ -236,7 +263,7 @@ def main():
     inputs = processor.apply_chat_template(messages, tokenize=True, add_generation_prompt=True,
                                            return_dict=True, return_tensors="pt").to(device)
     with torch.inference_mode():
-        result = model.generate(**inputs, max_new_tokens=1100, do_sample=False)
+        result = model.generate(**inputs, max_new_tokens=1600, do_sample=False)
     text = processor.batch_decode(result[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)[0]
     Path(request["output"]).write_text(text, encoding="utf-8")
 

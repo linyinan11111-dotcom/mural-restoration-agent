@@ -14,7 +14,7 @@
 
 - 旧版 `scripts/verify_desktop.py` 与 `tests/test_desktop.py` 只覆盖旧 Qt Widgets 界面，不能代表发货前端；本次已把验收改为发货 WebEngine 外壳，旧界面仅保留画布回归。
 - 旧报告 `artifacts/desktop-verification.json` 在 2026-10-31 16:07 被旧脚本重跑覆盖为 `telea/cpu`（LaMa 仅作为第二候选出现），与 README 旧表述不一致；这正是本次把验收脚本改为“断言工具=LaMa、设备=CUDA”的原因。
-- `dist/Shibi-1.0` 为 12:07 构建，不包含本次修复；交付前需重新运行 `scripts/build_portable.py`。
+- 仓库不附带便携包；交付前运行 `scripts/build_portable.py` 生成最新包。
 
 ## 已实现但尚未完成真实模型验收
 

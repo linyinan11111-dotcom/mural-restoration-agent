@@ -1,4 +1,4 @@
-"""One-shot worker. May run under a separate MURAL_WORKER_PYTHON environment."""
+﻿"""One-shot worker. May run under a separate MURAL_WORKER_PYTHON environment."""
 from pathlib import Path
 import json
 import sys
@@ -60,10 +60,13 @@ def execute(request):
         if Path(request['cancel_file']).exists():
             raise RuntimeError('Cancelled')
         return callback_kwargs
+    neg = step.get('negative_prompt') or 'modern objects, text, watermark, vivid neon colors, photorealistic face'
+    strength = float(step.get('strength', .8))
+    steps = 30 if strength >= 0.9 else 25
     args = dict(prompt=step.get('prompt') or 'conservative reconstruction of aged mural, preserve existing painted lines, muted mineral pigments, matching surrounding texture',
-                negative_prompt='modern objects, text, watermark, vivid neon colors, photorealistic face',
+                negative_prompt=neg,
                 image=canvas, mask_image=mask_canvas, height=padded_size[1], width=padded_size[0],
-                num_inference_steps=25, strength=step.get('strength', .8), guidance_scale=6.5,
+                num_inference_steps=steps, strength=strength, guidance_scale=6.5,
                 generator=torch.Generator('cpu').manual_seed(step['seed']), callback_on_step_end=callback)
     if step.get('structure_control'):
         import numpy as np
@@ -81,7 +84,8 @@ def execute(request):
             'model': request['model'], 'model_index_sha256': sha256(Path(request['model'])/'model_index.json'),
             'model_provenance': provenance(request['model']),
             'controlnet_provenance': provenance(request['controlnet']) if step.get('structure_control') else None,
-            'inference_steps': 25, 'structure_control': step.get('structure_control', False)}
+            'inference_steps': int(args.get('num_inference_steps', 25)), 'structure_control': step.get('structure_control', False),
+            'strength': float(step.get('strength', .8))}
 
 
 def main():

@@ -447,7 +447,9 @@ class FeatureMixin:
 
     def change_mode(self):
         mode = self.mode.currentData()
-        target = 'reference' if mode == 'evidence' else 'diffusion' if mode == 'speculative' else 'lama' if self.engine.lama.available() else 'opencv'
+        target = ('reference' if mode == 'evidence'
+                  else 'diffusion' if mode in {'speculative', 'enhanced'} and self.engine.tools.availability().get('diffusion')
+                  else 'lama' if self.engine.lama.available() else 'opencv')
         self.backend.setCurrentIndex(self.backend.findData(target))
         self.controlnet.setEnabled(mode == 'speculative')
         if mode != 'speculative':

@@ -9,6 +9,8 @@ from io import BytesIO
 from pathlib import Path
 from typing import Literal
 import hashlib
+import json
+import shutil
 import math
 import importlib.metadata
 import numpy as np
@@ -31,15 +33,30 @@ class JobRequest(BaseModel):
     planner: Literal['rules', 'api', 'local'] = 'rules'
     candidate_count: int = Field(default=2, ge=1, le=3)
     instructions: str = Field(default='', max_length=2000)
-    mode: Literal['conservative', 'evidence', 'speculative'] = 'conservative'
+    mode: Literal['conservative', 'enhanced', 'evidence', 'speculative'] = 'conservative'
     registration_id: str | None = None
     budget: Budget | None = None
     structure_control: bool = False
+    workflow: Literal['standard', 'professional_step'] = 'standard'
+    rationale: str = Field(default='', max_length=2000)
+    evidence_level: Literal['observation', 'conservative', 'enhanced', 'evidence', 'speculative'] | None = None
+    expert_notes: str = Field(default='', max_length=2000)
+    mask_source: Literal['ai_candidate', 'manual', 'sam', 'crack'] | None = None
+    allow_enhanced: bool = False
+    risk_acknowledged: bool = False
+    mask_gate_confirmed: bool = False
+    has_unrestorable: bool = False
+    has_uncertain: bool = False
+    force_override: bool = False
+    force_override_reason: str = ''
+    contest_demo: bool | None = True
 
 
 class ReviewRequest(BaseModel):
     candidate_id: str
     note: str = Field(default='', max_length=2000)
+    archive_as_hypothesis: bool = False
+    decision: str | None = None
 
 
 def create_app(settings=None):
@@ -122,6 +139,57 @@ def create_app(settings=None):
         image.save(buffer, format='PNG')
         return add_image(buffer.getvalue(), '合成纹样练习图（非文物照片）.png')
 
+    @app.post('/api/competition-demo', status_code=201)
+    def competition_demo():
+        # Observe-only pack for contest judges — no generative mural image.
+        pack = ROOT / 'data' / 'demo_competition'
+        source = pack / 'source.jpg'
+        if not source.exists() or not (pack / 'regions.json').exists():
+            raise HTTPException(404, '未找到 data/demo_competition（需要 source.jpg 与 regions.json）。')
+        record = add_image(source.read_bytes(), '比赛观察包 · 侧面天人残片（观察标注，非生成）.jpg')
+        folder = store.folder(record['id'])
+        for name in ('overlay_risk.png', 'compare_source_overlay.png', 'legend.png', 'regions.json'):
+            src = pack / name
+            if src.exists():
+                shutil.copy2(src, folder / name)
+        regions_payload = {}
+        if (folder / 'regions.json').exists():
+            regions_payload = json.loads((folder / 'regions.json').read_text(encoding='utf-8'))
+        iid = record['id']
+        record['observe'] = {
+            'policy': regions_payload.get('policy', 'competition_observe_only'),
+            'no_generative_mural': True,
+            'overlay_risk_url': f'/api/assets/{iid}/overlay_risk.png',
+            'compare_url': f'/api/assets/{iid}/compare_source_overlay.png',
+            'legend_url': f'/api/assets/{iid}/legend.png',
+            'regions': regions_payload.get('regions', []),
+            'legend': regions_payload.get('legend', {}),
+            'notice': regions_payload.get('notice', ''),
+            'risk_note': '红区禁绘；AI 标注非病害鉴定结论。',
+            'export_note': '仅标注层 + 复核记录 + 说明，不含修复成图。',
+        }
+        from . import human_gate as hg
+        try:
+            gate_doc = hg.load_sample('sample-from-shibi-pending', root=ROOT)
+        except FileNotFoundError:
+            gate_doc = hg.apply_evaluate({
+                'run_id': f'observe-{iid[:8]}',
+                'stage': 'observe',
+                'request_flags': {'wants_generative_restore': False},
+                'candidates': [],
+                'reviewer': {'role': '文物修复人员', 'name': '', 'confirmed': False, 'confirmed_at': ''},
+            })
+        gate_doc = hg.apply_evaluate(gate_doc)
+        payload = hg.response_payload(gate_doc)
+        record['gate_review'] = gate_doc
+        record['gate'] = payload['gate']
+        record['export_allowed'] = payload['export_allowed']
+        record['banner'] = payload['banner']
+        record['observe']['gate'] = payload['gate']
+        record['observe']['export_allowed'] = payload['export_allowed']
+        record['observe']['banner'] = payload['banner']
+        return record
+
     @app.post('/api/images/{image_id}/masks', status_code=201)
     async def upload_mask(image_id: str, file: UploadFile = File(...)):
         image = require('image', image_id)
@@ -141,6 +209,7 @@ def create_app(settings=None):
         Image.fromarray(array.astype(np.uint8) * 255).save(path)
         return store.put('mask', {'id': identifier, 'image_id': image_id, 'created_at': timestamp(),
                                  'fraction': round(float(array.mean()), 6), 'sha256': sha256(path),
+                                 'proposal_ids': [], 'user_confirmed': True, 'mask_source': 'manual',
                                  'url': f'/api/assets/{identifier}/mask.png'})
 
     @app.post('/api/jobs', status_code=202)
@@ -159,7 +228,17 @@ def create_app(settings=None):
         try:
             return workspace.create_job(store, engine, require('image', request.image_id), mask, request.backend,
                 request.planner, request.candidate_count, request.instructions, request.mode, request.registration_id,
-                request.budget.model_dump() if request.budget else None, request.structure_control)
+                request.budget.model_dump() if request.budget else None, request.structure_control,
+                workflow=request.workflow, rationale=request.rationale, evidence_level=request.evidence_level,
+                expert_notes=request.expert_notes, mask_source=request.mask_source,
+                allow_enhanced=request.allow_enhanced,
+            risk_acknowledged=request.risk_acknowledged,
+            mask_gate_confirmed=request.mask_gate_confirmed,
+            has_unrestorable=request.has_unrestorable,
+            has_uncertain=request.has_uncertain,
+            force_override=request.force_override,
+            force_override_reason=request.force_override_reason,
+            contest_demo=request.contest_demo)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
@@ -189,13 +268,24 @@ def create_app(settings=None):
 
     @app.post('/api/jobs/{job_id}/review')
     def review(job_id: str, request: ReviewRequest):
+        from .professional import validate_candidate_selection
         job = require('job', job_id)
         if request.candidate_id not in [c['id'] for c in job['candidates']]:
             raise HTTPException(400, '所选候选不属于当前任务。')
         if job['status'] in {'queued', 'planning', 'running', 'evaluating'}:
             raise HTTPException(409, '请等待任务完成或取消后再选择。')
+        candidate = next(c for c in job['candidates'] if c['id'] == request.candidate_id)
+        try:
+            selection = validate_candidate_selection(
+                job, candidate, archive_as_hypothesis=request.archive_as_hypothesis,
+                decision=request.decision)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return store.update('job', job_id, selected_id=request.candidate_id,
-                            review={'note': request.note, 'time': timestamp()})
+                            selected_as=selection['selected_as'],
+                            review={'note': request.note, 'time': timestamp(),
+                                    'archive_as_hypothesis': selection['archive_as_hypothesis'],
+                                    'decision': selection.get('decision')})
 
     @app.get('/api/jobs/{job_id}/export')
     def export(job_id: str):
@@ -209,13 +299,23 @@ def create_app(settings=None):
     @app.get('/api/assets/{identifier}/{name}')
     def asset(identifier: str, name: str):
         kinds = {'image.png': 'image', 'mask.png': 'mask', 'result.png': 'candidate', 'difference.png': 'candidate'}
-        if name not in kinds:
-            raise HTTPException(404, '文件不存在。')
-        require(kinds[name], identifier)
+        observe_names = {
+            'overlay_risk.png', 'compare_source_overlay.png', 'legend.png', 'regions.json',
+        }
         path = store.folder(identifier) / name
+        if name in kinds:
+            require(kinds[name], identifier)
+        elif name in observe_names:
+            # Observe pack files live under the image folder after /api/competition-demo.
+            require('image', identifier)
+        else:
+            raise HTTPException(404, '文件不存在。')
         if not path.is_file():
             raise HTTPException(404, '文件不存在。')
-        return FileResponse(path, media_type='image/png')
+        media = 'application/json' if name.endswith('.json') else 'image/png'
+        if name.endswith('.jpg') or name.endswith('.jpeg'):
+            media = 'image/jpeg'
+        return FileResponse(path, media_type=media)
 
     return app
 
