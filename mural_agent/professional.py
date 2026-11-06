@@ -46,10 +46,10 @@ DECISION_LABELS = {
     'modify': '修改后采纳',
     'reject': '驳回',
 }
-# Contest demo: no mural generation as deliverable. Enhanced/speculative stay lab-only.
-CONTEST_DEMO = True
-CONTEST_EXECUTABLE = {'conservative'}  # demo mainline; observation never executes
-CONTEST_LAB_ONLY = {'enhanced', 'speculative', 'evidence'}
+# All repair modes are available. `contest_demo` remains for older archived jobs.
+CONTEST_DEMO = False
+CONTEST_EXECUTABLE = set()
+CONTEST_LAB_ONLY = set()
 
 # Demo copy (场景 A 保守 / 场景 B 加强) — UI reads these via bridge or hardcodes same strings.
 DEMO_COPY = {
@@ -76,18 +76,19 @@ LEVEL_LABELS = {
     'speculative': '推测性补全·假设性建议',
 }
 
-# Default SD inpaint strength for 加强修复 (product band 0.9–0.95).
-ENHANCED_DIFFUSION_STRENGTH = 0.92
+# Retain more observed context during enhanced inpainting.
+ENHANCED_DIFFUSION_STRENGTH = 0.68
 ENHANCED_DIFFUSION_PROMPT = (
-    'aged Chinese temple mural fragment, mineral pigments, soft weathered paint surface, '
-    'fill lacunae and eliminate visible craquelure and crack networks so the paint reads continuous, '
-    'match surrounding texture hue and grain, seamless inpainting, no new iconography'
+    'conservative inpainting of the masked damaged area in an aged Chinese mural, '
+    'continue only immediately adjacent colors, contours, and mineral pigment texture, '
+    'preserve the original composition and all visible paint, lines, cracks, and patina, '
+    'subtle weathered surface, no new figures, symbols, or decorative motifs'
 )
 ENHANCED_NEGATIVE_PROMPT = (
-    'visible cracks, craquelure, fissures, fracture lines, modern objects, text, watermark, '
-    'neon colors, photorealistic face, invented patterns, sharp CGI, oversaturated'
+    'white blank patch, flat solid fill, erased linework, clean new paint, modern objects, '
+    'text, watermark, neon colors, photorealistic face, invented patterns, sharp CGI, oversaturated'
 )
-ENHANCED_UI_HINT = '加强修复会处理露底并弱化/消除可见龟裂纹（仍非历史定稿）'
+ENHANCED_UI_HINT = '加强修复仅处理选区及附近缺损，不抹除未选中的裂纹与原画线条（仍非历史定稿）'
 
 
 def normalize_workflow(value):
@@ -159,10 +160,6 @@ def validate_professional_create(mask_record, *, rationale, evidence_level, mode
         if not force_override:
             raise ValueError('专业分步：不确定红区须勾选「专家强制放行」并填写理由，才可保守修补。')
         require_rationale(force_override_reason, label='强制放行理由')
-    if contest and level in CONTEST_LAB_ONLY:
-        raise ValueError('比赛演示主线禁止生成性补绘（加强/推测/证据重建）；请改用保守观察+标注图+报告。')
-    if contest and mode in CONTEST_LAB_ONLY:
-        raise ValueError('比赛演示主线禁用加强/推测修复模式；此类结果仅内部实验，不进演示终稿。')
     notes = (expert_notes or '').strip()[:2000]
     return {
         'rationale': rationale,
@@ -273,15 +270,7 @@ def normalize_region_kind(value, default='fillable_lacuna'):
 
 
 def contest_allows_pixel_export(job):
-    """Demo deliverable is annotation + report; generative finals are blocked."""
-    if not (job.get('contest_demo', CONTEST_DEMO)):
-        return True
-    mode = job.get('mode') or 'conservative'
-    level = job.get('evidence_level') or mode
-    if mode in CONTEST_LAB_ONLY or level in CONTEST_LAB_ONLY:
-        return False
-    if job.get('selected_as') in {'enhanced', 'hypothesis'}:
-        return False
+    """Pixel exports are available for all modes; selection labels stay in archives."""
     return True
 
 

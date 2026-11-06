@@ -49,7 +49,7 @@ class JobRequest(BaseModel):
     has_uncertain: bool = False
     force_override: bool = False
     force_override_reason: str = ''
-    contest_demo: bool | None = True
+    contest_demo: bool | None = False
 
 
 class ReviewRequest(BaseModel):

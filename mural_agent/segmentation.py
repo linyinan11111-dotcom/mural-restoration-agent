@@ -3,6 +3,7 @@ from pathlib import Path
 from threading import Lock
 import cv2
 import numpy as np
+from .professional import ENHANCED_DIFFUSION_STRENGTH
 
 
 def damage_proposal(image, sensitivity=85):
@@ -107,11 +108,8 @@ class SamSegmenter:
 
 
 # --- enhanced / craquelure helpers (加强修复) ---
-ENHANCED_DIFFUSION_STRENGTH = 0.92
-
-
 def craquelure_mask(image, exclude_mask=None, dilate_iters=2):
-    """Detect thin dark crack / craquelure lines on a mural RGB image.
+    """Propose thin dark crack / craquelure lines on a mural RGB image.
 
     Heuristic black-hat morphology (same family as crack_mask_proposal), but
     full-image. Optional exclude_mask (e.g. green mount) is zeroed out.
@@ -156,7 +154,7 @@ def craquelure_mask(image, exclude_mask=None, dilate_iters=2):
 
 
 def build_enhanced_work_mask(image, lacuna_mask, exclude_mask=None, crack_dilate=2):
-    """加强允许掩膜 = 露底 ∪ 自动裂纹细线（再轻度膨胀）。
+    """Restrict enhanced crack proposals to the selected damage and nearby context.
 
     Outside this mask, pixels must remain identical to the original.
     """
@@ -165,7 +163,10 @@ def build_enhanced_work_mask(image, lacuna_mask, exclude_mask=None, crack_dilate
     lacuna = (lacuna_mask > 0).astype(np.uint8) * 255
     cracks, crack_meta = craquelure_mask(
         image, exclude_mask=exclude_mask, dilate_iters=crack_dilate)
-    # Mild dilate on lacuna so SD covers edges of losses
+    # A full-frame heuristic must not turn a local repair into a broad repaint.
+    context = cv2.dilate(lacuna, np.ones((49, 49), np.uint8), iterations=1) > 0
+    cracks[~context] = 0
+    # Mild dilate on lacuna so inpainting covers its edge.
     lacuna_d = cv2.dilate(lacuna, np.ones((5, 5), np.uint8), iterations=1)
     work = cv2.bitwise_or(lacuna_d, cracks)
     if exclude_mask is not None:
@@ -176,5 +177,5 @@ def build_enhanced_work_mask(image, lacuna_mask, exclude_mask=None, crack_dilate
         'enhanced_fraction': float((work > 0).mean()),
         'crack_meta': crack_meta,
         'strength_default': ENHANCED_DIFFUSION_STRENGTH,
-        'note': 'enhanced_allow = lacuna∪craquelure; outside must match original',
+        'note': 'enhanced_allow = selected lacuna + nearby crack candidates; outside must match original',
     }

@@ -170,7 +170,7 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
            'has_uncertain': bool(professional_meta.get('has_uncertain')),
            'force_override': bool(professional_meta.get('force_override')),
            'force_override_reason': professional_meta.get('force_override_reason') or '',
-           'contest_demo': bool(professional_meta.get('contest_demo', True)),
+           'contest_demo': bool(professional_meta.get('contest_demo', False)),
            'selected_as': None}
     store.put('job', job)
     engine.submit(identifier)

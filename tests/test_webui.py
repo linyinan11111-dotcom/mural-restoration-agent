@@ -1,9 +1,4 @@
-"""Regression tests for the shipped Qt WebEngine shell and its QWebChannel bridge.
-
-These tests deliberately drive the same files that ship (ui/index.html, ui/app.js,
-mural_agent/desktop_web.py) instead of the legacy Qt Widgets window, so a broken
-frontend cannot pass the suite.
-"""
+"""Regression tests for the shipped Qt WebEngine shell and QWebChannel bridge."""
 import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')

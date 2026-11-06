@@ -1,10 +1,4 @@
-"""Acceptance run for the shipped Qt WebEngine shell.
-
-Drives ui/index.html + QWebChannel + the real LaMa CUDA engine in an isolated
-offscreen window. It asserts the candidate actually came from LaMa on CUDA and
-that pixels outside the frozen mask are untouched, because the previous version
-of this script silently accepted a traditional-algorithm fallback and recorded a
-report that no longer matched the README claim.
+"""Acceptance run for the Qt WebEngine desktop shell.
 
 Run: .\\.venv\\Scripts\\python.exe scripts/verify_desktop.py
 """
@@ -29,8 +23,8 @@ from PIL import Image, ImageDraw
 from PySide6.QtWidgets import QApplication
 
 from mural_agent.config import Settings
-from mural_agent.desktop import configure_application
 from mural_agent.desktop_web import WebMainWindow
+from mural_agent.qt_setup import configure_application
 
 OUTPUT = ROOT / 'artifacts'
 ACTIVE = {'queued', 'planning', 'running', 'evaluating'}

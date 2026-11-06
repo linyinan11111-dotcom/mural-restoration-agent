@@ -184,11 +184,11 @@ class Engine:
                     if self.lama.available():
                         cons_pred = self.lama.predict(original, mask)
                         base_for_tools = composite(original, cons_pred, mask)
-                        self.store.event(job_id, '加强修复：已用 LaMa 生成保守底图，再对露底∪裂纹掩膜加强。')
+                        self.store.event(job_id, '加强修复：已用 LaMa 生成保守底图，再对选区附近缺损加强。')
                     else:
                         cons_pred = opencv_inpaint(original, mask, 'telea', 5)
                         base_for_tools = composite(original, cons_pred, mask)
-                        self.store.event(job_id, '加强修复：已用 Telea 生成保守底图，再对露底∪裂纹掩膜加强。')
+                        self.store.event(job_id, '加强修复：已用 Telea 生成保守底图，再对选区附近缺损加强。')
                     Image.fromarray(base_for_tools).save(self.store.folder(job_id) / 'enhanced_conservative_base.png')
                 except Exception as exc:
                     self.store.event(job_id, f'加强修复：保守底图失败，回退原图加强：{str(exc)[:160]}')
@@ -200,7 +200,7 @@ class Engine:
                 crk = enhanced_meta.get('crack_fraction', 0)
                 self.store.event(
                     job_id,
-                    f'加强允许掩膜占比 {frac:.2%}（露底 {lac:.2%} + 裂纹 {crk:.2%}）。')
+                    f'加强允许掩膜占比 {frac:.2%}（选中缺损 {lac:.2%} + 附近裂纹 {crk:.2%}）。')
             if job.get('plan'):
                 plan = Plan.model_validate(job['plan'])
             else:

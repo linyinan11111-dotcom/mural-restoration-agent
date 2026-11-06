@@ -187,6 +187,8 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 .damage-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: start; padding: 8px; border-bottom: 1px solid var(--line-soft); background: #fff; font-size: 10px; }
 .damage-item:last-child { border-bottom: 0; }
 .damage-item-main { min-width: 0; }
+.damage-method { display: flex; align-items: center; gap: 6px; margin-top: 5px; color: var(--muted); }
+.damage-method select { min-width: 0; max-width: 100%; padding: 3px 6px; font-size: 10px; }
 .damage-select { padding: 0; border: 0; background: transparent; text-align: left; font-size: 10px; font-weight: 600; }
 .damage-item small { display: block; color: var(--muted); margin-top: 3px; line-height: 1.45; }
 .damage-item.selected { background: #f3f6f8; box-shadow: inset 2px 0 0 #68798d; }
@@ -196,6 +198,9 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 .damage-item .button { min-height: 25px; padding: 0 7px; font-size: 9px; }
 .damage-workflow { margin: 12px 0; padding-top: 10px; border-top: 1px solid var(--line-soft); }
 .damage-workflow .proposal-preview { height: 135px; }
+.manual-repair-settings { margin-top: 10px; border-top: 1px solid var(--line-soft); padding-top: 8px; }
+.manual-repair-settings summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+.manual-repair-settings .run-button { margin-top: 6px; }
 .reference-search { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(80px, 1fr) auto; gap: 6px; }
 .reference-search input { font-size: 10px; }
 .reference-search .button { font-size: 10px; }
@@ -301,10 +306,6 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 .tool-button[data-tool="uncertainty"].active { outline: 2px solid #ff8c00; }
 .tool-button[data-tool="unrestorable"].active { outline: 2px solid #dc003c; }
 
-.lab-only-row.hidden, .lab-only-row[hidden] { display: none !important; }
-body.contest-demo .lab-only-row { display: none !important; }
-body.contest-demo.show-lab .lab-only-row { display: flex !important; }
-body.contest-demo.show-lab label.lab-only-row { display: flex !important; }
 .tool-button[data-tool="uncertain"].active { outline: 2px solid #dc003c; }
 .tool-button[data-tool="unrestorable"].active { outline: 2px solid #8b001f; }
 #region-canvas.unrestorable-hatch {

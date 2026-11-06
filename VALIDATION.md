@@ -1,45 +1,28 @@
-# 拾壁系统验收记录
+# 验证状态
 
-更新时间：2026-10-31（本次优化后）。应用为 Windows 桌面程序，发货界面使用 Qt WebEngine 加载随包 HTML/CSS/JS，通过 QWebChannel 调用本机引擎；不启动浏览器或本地 Web 服务。
+## 自动化测试
 
-## 当前实测基线
-
-- **测试**：`pytest -q` → **42 passed**（约 13 秒）。覆盖业务/API/规划器、旧版 Qt Widgets 画布回归，以及**发货 WebEngine 外壳**：页面加载、QWebChannel 快照、灰度掩膜往返（防整图选中）、桥接建任务→复核→导出 ZIP、`mergeProposal`、`aux_version` 契约、AI 缺损面板渲染、一键 AI 自主恢复（桥接层与前端点击两条路径）、滑动对照两图对齐（`getBoundingClientRect` 断言）。可复现命令：`.\.venv\Scripts\python.exe -m pytest -q`。
-- **发货壳验收**：`scripts/verify_desktop.py` 在隔离离屏窗口中加载 `ui/index.html`，通过桥接完成真实 LaMa CUDA 修复。本次结果：页面加载成功、job=review、候选 `tool=lama`、`device=cuda`、耗时 3.65 s、`outside_max_difference=0`、候选 2 个。报告：`artifacts/desktop-web-verification.json`；档案：`artifacts/verified-web-restoration.zip`；预览：`artifacts/desktop-web-preview.png`。
-- **环境**：Python 3.13.12；PyTorch 2.11.0+cu128，`cuda_available=True`；GPU RTX 5070 Ti Laptop 11.94 GiB；PySide6 6.12、OpenCV 4.14、Transformers 4.57.6、Diffusers 0.36.0、LPIPS 可导入；`pip check` 无冲突。
-- **权重**：`models/` 5 组权重共 8.34 GB；`big-lama.pt` 实测 SHA-256 与 README 记录一致；SAM2/Qwen3-VL/SD Inpainting/ControlNet 的 `provenance.json` 含固定 revision、许可与逐文件 SHA-256；LPIPS 账本只有 SHA-256/许可，`big-lama` 无 provenance（README 记录 hash）。
-- **历史工件**：`artifacts/system-acceptance/report.json` 记录了 LaMa CUDA 3.75 s、SAM 2 实际推理 IoU 0.9866、参考配准通过；`artifacts/mural-study/` 有 48 例配对实验与 24 例细裂缝实验及逐例数据。
-
-## 与旧验收记录的关系
-
-- 旧版 `scripts/verify_desktop.py` 与 `tests/test_desktop.py` 只覆盖旧 Qt Widgets 界面，不能代表发货前端；本次已把验收改为发货 WebEngine 外壳，旧界面仅保留画布回归。
-- 旧报告 `artifacts/desktop-verification.json` 在 2026-10-31 16:07 被旧脚本重跑覆盖为 `telea/cpu`（LaMa 仅作为第二候选出现），与 README 旧表述不一致；这正是本次把验收脚本改为“断言工具=LaMa、设备=CUDA”的原因。
-- 仓库不附带便携包；交付前运行 `scripts/build_portable.py` 生成最新包。
-
-## 已实现但尚未完成真实模型验收
-
-- **一键 AI 自主恢复**（`auto_restore.py`）：本地 Qwen 识别 → 逐项细化掩膜（裂缝走黑帽提取，其他走 SAM 框提示，SAM 不可用回退矩形框）→ 合并掩膜（上限图像 25%、最多 5 处）→ 按类别/尺寸选保守工具 → 自动建任务并生成候选。已有单元测试（筛选/路由/步骤/掩膜上限）与桥接集成测试（伪造识别结果，验证掩膜、`planner=auto`、任务与候选）。**真实模型冒烟已跑通**：合成纹样练习图识别 3 处裂缝，自动掩膜占 1.51%，LaMa CUDA 候选，掩膜外差异 0，总耗时约 50.5 秒（含 Qwen 加载）。**安全阀**：VLM 输出被截断时不再自动提交任务；面积小于图像 0.05% 的候选框按噪声过滤；合并后的自动掩膜小于 0.05% 时直接报错，避免在文字/边框/拼图上把噪声当缺损去修。真实壁画的漏检/误检率、工具选择合理性仍未评估。
-- **Qwen3-VL 缺损识别与本地规划**：已接入发货 UI（“工具/评测”页），子进程隔离、JSON 容错解析与去重/合并逻辑已有单元测试。**真实推理已跑通一次**：在合成纹样练习图上经桥接调用 Qwen3-VL 2B，含模型加载约 41 秒，返回 8 条原始候选（模型重复同一裂缝多次），经去重/合并后得到 3 条候选并成功生成红框预览（`artifacts/damage-smoke/`）。它不是真实壁画，漏检/误检率与建议质量仍未评估。
-- **Stable Diffusion / ControlNet**：ControlNet 加载缺 fp16 变体的问题已修并可在本地实例化，但尚未实际生成候选；SD 仍为整图 512px 推理，未实现 ROI。
-- **参考检索与跨图配准**：SIFT/RANSAC 与人工核验门禁有测试，真实跨图重建质量未验证。
-- **配对评测（LPIPS）、数据集分组、批量任务、空间备份**：代码存在，未做完整交互验收。
-- **真实视觉 API**：没有配置计费密钥，未进行实际 API 调用验收。
-
-## 数据和专业边界
-
-- 附带 5 张克利夫兰艺术博物馆开放访问壁画图像（CC0）。它们是公开图像示例，不是无损原貌、成对真值、专家病害标签或代表性固定评测集。
-- 修复效果实证来自合成掩膜（48 + 24 例），测的是“能否补回被遮挡的像素”，不是历史真实性或专业修复质量。
-- 尚未完成 CMAMRNet/PGRDiff 等领域模型的许可证核查、可复现推理或质量对照，因此没有将其标成已接入模型。
-- 工程分数只检查图像边界、有限预算和掩膜外像素等性质；没有可信配对目标和专家评审时，任何分数都不能证明补全内容符合历史原貌。
-
-## 可复现入口
+在当前工作区执行：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe scripts/verify_desktop.py
-.\.venv\Scripts\python.exe -m pytest -m "not web"     # 无 QtWebEngine 的机器
-.\.venv\Scripts\python.exe scripts/download_models.py sam2 vision diffusion controlnet --lpips
-.\.venv\Scripts\python.exe scripts/build_portable.py --output dist/Shibi-1.0 --include-models
 ```
 
-本次优化的具体改动与剩余问题见 [CHANGELOG.md](CHANGELOG.md)；优化前的独立评估见 [PROJECT_REVIEW.md](PROJECT_REVIEW.md)。
+最近一次完整运行结果：**47 passed, 15 failed**。失败测试尚未与当前产品行为对齐，主要涉及比赛演示限制、风险分类名称、AI 自动提交修复流程、候选数量、羽化合成和质量反馈修订次数。该测试结果不表示当前工作区通过全部回归。
+
+以下静态检查通过：
+
+```powershell
+node --check ui/app.js
+.\.venv\Scripts\python.exe -m compileall -q mural_agent
+git diff --check
+```
+
+## 尚未验证
+
+- 本文对应的代码状态尚未重新启动 Windows 桌面应用检查交互界面。
+- 本文对应的代码状态尚未重新运行 GPU 修复验收。
+- 真实壁画上的缺损识别准确率、修复质量和历史可信度没有经过专家标注数据验证。
+- 视觉 API 调用需要用户自己的密钥与服务配置；没有在此记录真实付费调用结果。
+
+工程像素指标和合成缺损测试不能证明补全内容符合壁画历史原貌。应用输出仅供数字修复实验和人工复核。

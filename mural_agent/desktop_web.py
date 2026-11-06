@@ -1,6 +1,7 @@
 """Qt WebEngine desktop shell for the local HTML workbench."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import base64
 import json
 import os
@@ -11,7 +12,7 @@ from pathlib import Path
 from PIL import Image
 
 from PySide6.QtCore import QObject, QLockFile, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QFont, QFontDatabase, QIcon
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QMainWindow
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEngineSettings
@@ -19,9 +20,9 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from . import backup, datasets, references, workspace
 from .config import ROOT, Settings
-from .desktop import configure_application
 from .engine import Engine
 from .imaging import image_array, mask_array
+from .qt_setup import configure_application
 from .segmentation import damage_proposal
 from .storage import Store, new_id, timestamp
 
@@ -37,6 +38,7 @@ class Bridge(QObject):
     def __init__(self, settings, store, engine):
         super().__init__()
         self.settings, self.store, self.engine = settings, store, engine
+        self.aux_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='mural-aux')
         self.aux = {'status': 'idle'}
         self.aux_future = None
         self.aux_version = 0
@@ -110,9 +112,12 @@ class Bridge(QObject):
     def _aux(self, function, label):
         if self.aux_future and not self.aux_future.done():
             raise ValueError('辅助工具仍在运行。')
+        if any(job['status'] in {'queued', 'planning', 'running', 'evaluating'}
+               for job in self.store.list('job')):
+            raise ValueError('修复任务运行中，请完成或取消后再分析。')
         self.aux = {'status': 'running', 'label': label}
         self.aux_version += 1
-        self.aux_future = self.engine.executor.submit(function)
+        self.aux_future = self.aux_executor.submit(function)
         return {'status': 'running'}
 
     def poll_aux(self):
@@ -402,6 +407,8 @@ class Bridge(QObject):
     @Slot(str, result=str)
     def createJob(self, request_json):
         def action():
+            if self.aux_future and not self.aux_future.done():
+                raise ValueError('AI 分析仍在运行，请完成后再启动修复。')
             request = json.loads(request_json)
             image = self.store.get('image', request['image_id'])
             mask = self.store.get('mask', request['mask_id'])
@@ -425,7 +432,7 @@ class Bridge(QObject):
                 has_uncertain=bool(request.get('has_uncertain')),
                 force_override=bool(request.get('force_override')),
                 force_override_reason=request.get('force_override_reason') or '',
-                contest_demo=request.get('contest_demo', True))
+                contest_demo=request.get('contest_demo', False))
             return self._job(job)
         return self._result(action)
 
@@ -474,10 +481,9 @@ class Bridge(QObject):
     @Slot(str, result=str)
     def saveResult(self, candidate_id):
         def action():
-            from .professional import contest_allows_pixel_export
             job = next((j for j in self.store.list('job') if any(c.get('id') == candidate_id for c in j.get('candidates') or [])), None)
-            if job and not contest_allows_pixel_export(job):
-                raise ValueError('比赛演示禁止导出生成性补绘终稿；请导出标注对照图或报告档案。')
+            if not job:
+                raise ValueError('修复候选不存在。')
             path, _ = QFileDialog.getSaveFileName(None, '保存修复结果', 'restored.png', 'PNG 图像 (*.png)')
             if path:
                 shutil.copy2(self.store.folder(candidate_id) / 'result.png', path)
@@ -488,11 +494,9 @@ class Bridge(QObject):
     @Slot(str, result=str)
     def exportArchive(self, job_id):
         def action():
-            from .professional import contest_allows_pixel_export
             job = self.store.get('job', job_id)
-            # Archive still allowed (report), but warn if generative selection.
-            if job and not contest_allows_pixel_export(job):
-                self.notify.emit('提示：生成性结果不作为比赛终稿；档案仅供内部实验记录。')
+            if not job:
+                raise ValueError('修复任务不存在。')
             path, _ = QFileDialog.getSaveFileName(None, '导出修复档案', f'mural-{job_id[:8]}.zip', 'ZIP 档案 (*.zip)')
             if path:
                 source = self.engine.export(job_id)
@@ -657,62 +661,22 @@ class Bridge(QObject):
             if message and payload.get('auto', {}).get('awaiting_confirmation'):
                 self.notify.emit(payload['auto'].get('summary') or message)
             return payload
-        return self._result(lambda: self._aux(wrapped, 'AI 自主识别缺损并生成修复候选…'))
+        return self._result(lambda: self._aux(wrapped, 'AI 正在分析缺损与文化线索…'))
 
     @Slot(str, result=str)
     def runDefectRepairs(self, request_json):
         def action():
             request = json.loads(request_json)
+            if self.aux_future and not self.aux_future.done():
+                raise ValueError('AI 分析仍在运行，请完成后再启动修复。')
             if not request.get('confirmed'):
                 raise ValueError('请先逐项检查并勾选确认，再启动修复。')
-            image_id = request.get('image_id')
-            image = self.store.get('image', image_id)
-            if not image:
-                raise ValueError('图像记录不存在。')
-            proposal_ids = list(dict.fromkeys(request.get('proposal_ids') or []))
-            if not proposal_ids:
-                raise ValueError('没有已确认的缺损项。')
-            jobs, skipped = [], []
-            for proposal_id in proposal_ids:
-                proposal = self.store.get('proposal', proposal_id)
-                if not proposal or proposal.get('image_id') != image_id:
-                    skipped.append({'proposal_id': proposal_id, 'reason': '提案不存在或不属于当前图像'})
-                    continue
-                prior_job = self.store.get('job', proposal.get('repair_job_id')) if proposal.get('repair_job_id') else None
-                if prior_job and prior_job.get('status') not in {'failed', 'cancelled'}:
-                    skipped.append({'proposal_id': proposal_id, 'reason': '该缺损项已有修复任务'})
-                    continue
-                meta = proposal.get('metadata') or {}
-                region_class = proposal.get('region_class') or meta.get('region_class') or 'uncertain'
-                if not proposal.get('repair_allowed') or region_class != 'repairable':
-                    skipped.append({'proposal_id': proposal_id, 'reason': meta.get('risk_notice') or '风险分类禁止一键修复'})
-                    continue
-                route = meta.get('recommendation') or {}
-                backend = route.get('backend')
-                if backend not in {'opencv', 'telea', 'ns', 'lama', 'color'}:
-                    skipped.append({'proposal_id': proposal_id, 'reason': '没有可用的保守推荐方法'})
-                    continue
-                method = str(route.get('method') or '保守局部修补')
-                item_type = str(meta.get('type') or '疑似缺损')
-                mask = workspace.add_mask(
-                    self.store, image, (self.store.folder(proposal_id) / 'mask.png').read_bytes(),
-                    [proposal_id], mask_source=proposal.get('mask_source') or 'ai_candidate',
-                    user_confirmed=True, region_class=region_class,
-                    risk_regions=meta.get('risk_regions') or [])
-                rationale = f"人工确认的{item_type}候选；按 AI 建议采用{method}。仅供修复人员复核，不作为历史定稿。"
-                job = workspace.create_job(
-                    self.store, self.engine, image, mask, backend, 'rules', 1,
-                    rationale + ' ' + str(meta.get('evidence') or ''), mode='conservative',
-                    budget={'candidates': 1, 'revisions': 0, 'timeout_seconds': 300},
-                    workflow='professional_step', rationale=rationale,
-                    evidence_level='conservative', expert_notes=str(meta.get('risk_notice') or ''),
-                    mask_source=proposal.get('mask_source') or 'ai_candidate',
-                    mask_gate_confirmed=True, contest_demo=True)
-                job = self.store.update('job', job['id'], defect_proposal_id=proposal_id,
-                                        defect_type=item_type, recommended_method=method)
-                self.store.update('proposal', proposal_id, confirmed=True, repair_job_id=job['id'])
-                jobs.append(self._job(job))
-            return {'jobs': jobs, 'skipped': skipped}
+            from .defect_jobs import run_confirmed_defects
+            result = run_confirmed_defects(
+                self.store, self.engine, request.get('image_id'),
+                request.get('proposal_ids'), request.get('methods'))
+            result['jobs'] = [self._job(job) for job in result['jobs']]
+            return result
         return self._result(action)
 
     @Slot(str, str, result=str)
@@ -929,6 +893,7 @@ class WebMainWindow(QMainWindow):
             # marks running jobs as interrupted, so work can be resumed from history.
             try:
                 self.engine.executor.shutdown(wait=False, cancel_futures=True)
+                self.bridge.aux_executor.shutdown(wait=False, cancel_futures=True)
             finally:
                 os._exit(0)
         active = [j for j in self.store.list('job') if j['status'] in {'queued', 'planning', 'running', 'evaluating'}]
