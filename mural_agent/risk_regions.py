@@ -207,7 +207,7 @@ def classify_mask_regions(rgb: np.ndarray, lacuna_mask: np.ndarray, mount_mask=N
         'lacuna_fraction': float((lacuna > 0).mean()),
         'blocking': aggregate in BLOCKING_KINDS,
         'notice': (
-            '风险分类为启发式演示：红斜线=uncertainty，深红实心=unrestorable；'
+            '风险分类为启发式演示：橙=repairable，红半透明=uncertainty，红斜线=unrestorable；'
             '禁止生成纹样/图像。以专业人员改判为准。'
         ),
     }

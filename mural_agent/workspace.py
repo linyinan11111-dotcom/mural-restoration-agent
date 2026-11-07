@@ -60,7 +60,7 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
                evidence_level=None, expert_notes='', mask_source=None, allow_enhanced=False,
                risk_acknowledged=False, mask_gate_confirmed=False, has_unrestorable=False,
                has_uncertain=False, force_override=False, force_override_reason='',
-               contest_demo=None):
+               contest_demo=None, expert_force_override=False):
     from .planner import Budget
     from .imaging import mask_array
     from .professional import (WORKFLOW_PROFESSIONAL, normalize_workflow, normalize_mask_source,
@@ -105,11 +105,9 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
     professional_meta = {}
     if workflow == WORKFLOW_PROFESSIONAL:
         # Prefer dedicated rationale; fall back to instructions for API callers.
-        region_class = (mask_record.get('region_class') or '')
-        if region_class == 'unrestorable':
-            has_unrestorable = True
-        if region_class == 'uncertain':
-            has_uncertain = True
+        from .professional import mask_risk_flags
+        has_unrestorable, has_uncertain = mask_risk_flags(
+            mask_record, has_unrestorable=has_unrestorable, has_uncertain=has_uncertain)
         if mask_record.get('expert_force_override'):
             force_override = True
             force_override_reason = force_override_reason or mask_record.get('force_override_reason') or ''
@@ -125,9 +123,10 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
             mask_gate_confirmed=mask_gate_confirmed,
             has_unrestorable=has_unrestorable,
             has_uncertain=has_uncertain,
-            force_override=force_override,
+            force_override=force_override or expert_force_override,
             force_override_reason=force_override_reason,
             contest_demo=contest_demo,
+            expert_force_override=expert_force_override,
         )
     elif evidence_level:
         # Allow optional provenance fields on standard jobs without full gates.

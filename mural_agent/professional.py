@@ -119,13 +119,63 @@ def require_rationale(text, *, label='依据'):
     return rationale[:2000]
 
 
+def _normalized_region_kind(value):
+    if not value:
+        return ''
+    from .risk_regions import normalize_region_kind
+    try:
+        return normalize_region_kind(value)
+    except ValueError:
+        return ''
+
+
+def mask_risk_flags(mask_record, has_unrestorable=False, has_uncertain=False):
+    """Read repairable / uncertainty / unrestorable from the mask, including aliases."""
+    mask_record = mask_record or {}
+    kind = _normalized_region_kind(mask_record.get('region_kind') or mask_record.get('region_class'))
+    if kind == 'unrestorable':
+        has_unrestorable = True
+    if kind == 'uncertainty':
+        has_uncertain = True
+    cleared = {'refused', 'skipped', 'repairable_confirmed', 'fillable_confirmed', 'force_approved'}
+    for region in mask_record.get('risk_regions') or []:
+        status = (region.get('status') or '').strip().lower()
+        if status in cleared:
+            continue
+        region_kind = _normalized_region_kind(region.get('region_kind') or region.get('region_class'))
+        if region_kind == 'unrestorable':
+            has_unrestorable = True
+        elif region_kind == 'uncertainty':
+            has_uncertain = True
+    return bool(has_unrestorable), bool(has_uncertain)
+
+
 def validate_professional_create(mask_record, *, rationale, evidence_level, mode,
                                  expert_notes='', mask_source=None, allow_enhanced=False,
                                  risk_acknowledged=False, mask_gate_confirmed=False,
                                  has_unrestorable=False, has_uncertain=False,
                                  force_override=False, force_override_reason='',
-                                 contest_demo=None):
+                                 contest_demo=None, expert_force_override=False):
     """Gate before enqueueing a professional_step job."""
+    if expert_force_override or (mask_record or {}).get('expert_force_override'):
+        force_override = True
+        if not force_override_reason:
+            force_override_reason = (mask_record or {}).get('force_override_reason') or ''
+    has_unrestorable, has_uncertain = mask_risk_flags(
+        mask_record, has_unrestorable=has_unrestorable, has_uncertain=has_uncertain)
+    # Risk class is the contest block. Surface it before the mask-checkbox reminder
+    # so an unrestorable / uncertainty mask cannot be waved through by omitting the box.
+    if has_unrestorable:
+        raise ValueError('专业分步：存在不可复原（unrestorable）标红区，禁止任何像素修复；仅可导出标注图与报告。')
+    rationale_text = (rationale or '').strip()
+    if has_uncertain:
+        level_preview = (evidence_level or '').strip().lower()
+        if level_preview != 'conservative' or (mode or '').strip().lower() != 'conservative':
+            raise ValueError('专业分步：不确定（uncertainty）红区默认禁止加强/推测；仅可在强制放行后做保守修补。')
+        if not force_override:
+            raise ValueError('专业分步：不确定红区须勾选「专家强制放行」并填写理由，才可保守修补。')
+        if not (force_override_reason or '').strip():
+            force_override_reason = rationale_text
     if not mask_record.get('user_confirmed'):
         raise ValueError('专业分步：掩膜尚未经人工确认，不能创建或执行修复任务。')
     if not mask_gate_confirmed:
@@ -137,6 +187,9 @@ def validate_professional_create(mask_record, *, rationale, evidence_level, mode
     source = normalize_mask_source(mask_source or mask_record.get('mask_source') or 'manual')
     if source == 'ai_candidate' and not mask_record.get('user_confirmed'):
         raise ValueError('专业分步：AI 候选掩膜须先由专家确认后再建任务。')
+    contest = CONTEST_DEMO if contest_demo is None else bool(contest_demo)
+    if contest and (mode in {'enhanced', 'speculative'} or level in {'enhanced', 'speculative'}):
+        raise ValueError('比赛演示禁止生成性补绘（enhanced / speculative / 扩散成图）；请只导出标注层与复核记录。')
     # Speculative is off by default: mode and level must both opt in with rationale.
     if mode == 'speculative' or level == 'speculative':
         if mode != 'speculative' or level != 'speculative':
@@ -151,14 +204,7 @@ def validate_professional_create(mask_record, *, rationale, evidence_level, mode
         if not risk_acknowledged:
             raise ValueError('专业分步：加强修复须勾选风险提示（文化边界 / 非历史定稿）已知悉。')
         require_rationale(rationale, label='加强修复依据')
-    contest = CONTEST_DEMO if contest_demo is None else bool(contest_demo)
-    if has_unrestorable:
-        raise ValueError('专业分步：存在不可复原（unrestorable）标红区，禁止任何像素修复；仅可导出标注图与报告。')
     if has_uncertain:
-        if level != 'conservative':
-            raise ValueError('专业分步：不确定（uncertain）红区默认禁止加强/推测；仅可在强制放行后做保守修补。')
-        if not force_override:
-            raise ValueError('专业分步：不确定红区须勾选「专家强制放行」并填写理由，才可保守修补。')
         require_rationale(force_override_reason, label='强制放行理由')
     notes = (expert_notes or '').strip()[:2000]
     return {
@@ -172,6 +218,7 @@ def validate_professional_create(mask_record, *, rationale, evidence_level, mode
         'has_unrestorable': bool(has_unrestorable),
         'has_uncertain': bool(has_uncertain),
         'force_override': bool(force_override) if has_uncertain else False,
+        'expert_force_override': bool(force_override) if has_uncertain else False,
         'force_override_reason': (force_override_reason or '').strip()[:2000] if has_uncertain else '',
         'contest_demo': contest,
     }
@@ -270,7 +317,26 @@ def normalize_region_kind(value, default='fillable_lacuna'):
 
 
 def contest_allows_pixel_export(job):
-    """Pixel exports are available for all modes; selection labels stay in archives."""
+    """Block generative finals when the job is a contest delivery.
+
+    Conservative contest jobs may still export a working record. Enhanced,
+    speculative, diffusion, and hypothesis selections are not contest deliverables.
+    Jobs outside contest mode keep the existing export path.
+    """
+    if not job or not job.get('contest_demo'):
+        return True
+    mode = (job.get('mode') or '').strip().lower()
+    level = (job.get('evidence_level') or '').strip().lower()
+    if mode in {'enhanced', 'speculative'} or level in {'enhanced', 'speculative'}:
+        return False
+    if (job.get('selected_as') or '') in {'hypothesis', 'enhanced'}:
+        return False
+    selected = job.get('selected_id')
+    for item in job.get('candidates') or []:
+        if selected and item.get('id') != selected:
+            continue
+        if item.get('speculative') or item.get('enhanced') or item.get('tool') == 'diffusion':
+            return False
     return True
 
 

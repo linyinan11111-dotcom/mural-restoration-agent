@@ -34,6 +34,13 @@ def find_source() -> Path:
 
 
 def main():
+    if "--synthetic" in sys.argv or not any(path.is_file() for path in SRC_CANDIDATES):
+        from mural_agent.contest_pack import build_synthetic_pack, write_gate_samples
+        pack = build_synthetic_pack(ROOT / "datasets" / "demo_competition")
+        gates = write_gate_samples(ROOT / "datasets" / "human-gate")
+        print("synthetic pack", pack)
+        print("gate samples", gates)
+        return
     from mural_agent.risk_regions import (
         classify_mask_regions, render_risk_overlay, detect_mount_mask, REGION_LABELS,
     )

@@ -49,6 +49,7 @@ class JobRequest(BaseModel):
     has_uncertain: bool = False
     force_override: bool = False
     force_override_reason: str = ''
+    expert_force_override: bool = False
     contest_demo: bool | None = False
 
 
@@ -142,10 +143,12 @@ def create_app(settings=None):
     @app.post('/api/competition-demo', status_code=201)
     def competition_demo():
         # Observe-only pack for contest judges — no generative mural image.
-        pack = ROOT / 'data' / 'demo_competition'
+        from .contest_pack import resolve_competition_pack
+        try:
+            pack = resolve_competition_pack(ROOT, create=True)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
         source = pack / 'source.jpg'
-        if not source.exists() or not (pack / 'regions.json').exists():
-            raise HTTPException(404, '未找到 data/demo_competition（需要 source.jpg 与 regions.json）。')
         record = add_image(source.read_bytes(), '比赛观察包 · 侧面天人残片（观察标注，非生成）.jpg')
         folder = store.folder(record['id'])
         for name in ('overlay_risk.png', 'compare_source_overlay.png', 'legend.png', 'regions.json'):
@@ -172,13 +175,10 @@ def create_app(settings=None):
         try:
             gate_doc = hg.load_sample('sample-from-shibi-pending', root=ROOT)
         except FileNotFoundError:
-            gate_doc = hg.apply_evaluate({
-                'run_id': f'observe-{iid[:8]}',
-                'stage': 'observe',
-                'request_flags': {'wants_generative_restore': False},
-                'candidates': [],
-                'reviewer': {'role': '文物修复人员', 'name': '', 'confirmed': False, 'confirmed_at': ''},
-            })
+            gate_doc = hg.candidates_from_regions(
+                regions_payload.get('regions', []), run_id=f'observe-{iid[:8]}')
+            if not gate_doc.get('candidates'):
+                gate_doc = hg.load_builtin_sample('sample-from-shibi-pending')
         gate_doc = hg.apply_evaluate(gate_doc)
         payload = hg.response_payload(gate_doc)
         record['gate_review'] = gate_doc
@@ -236,9 +236,10 @@ def create_app(settings=None):
             mask_gate_confirmed=request.mask_gate_confirmed,
             has_unrestorable=request.has_unrestorable,
             has_uncertain=request.has_uncertain,
-            force_override=request.force_override,
+            force_override=request.force_override or request.expert_force_override,
             force_override_reason=request.force_override_reason,
-            contest_demo=request.contest_demo)
+            contest_demo=request.contest_demo,
+            expert_force_override=request.expert_force_override)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 

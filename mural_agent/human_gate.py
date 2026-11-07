@@ -102,20 +102,23 @@ def apply_evaluate(doc: dict) -> dict:
 def human_gate_dirs(root: Path) -> list[Path]:
     root = Path(root)
     return [
+        root / "datasets" / "human-gate",
         root / "data" / "human-gate",
         root / "human-gate",
-        root,
     ]
 
 
 def resolve_gate_dir(root: Path | None = None) -> Path:
     candidates = []
+    here = Path(__file__).resolve().parent
+    repo = here.parent
     if root is not None:
         candidates.extend(human_gate_dirs(root))
-    here = Path(__file__).resolve().parent
     candidates.extend([
-        here.parent / "data" / "human-gate",
-        here / "data" / "human-gate",
+        repo / "datasets" / "human-gate",
+        repo / "data" / "human-gate",
+        repo / "human-gate",
+        Path.cwd() / "datasets" / "human-gate",
         Path.cwd() / "data" / "human-gate",
     ])
     seen = set()
@@ -297,3 +300,254 @@ def response_payload(doc: dict) -> dict:
         "gate_review": doc,
         "restored_image": False,
     }
+
+
+# Shipped click-through samples. Files under datasets/human-gate mirror these
+# so a fresh clone does not depend on the gitignored data/ directory.
+DEMO_CHECKLIST_CLEAR = {
+    "repairable_checked": True,
+    "uncertainty_checked": True,
+    "unrestorable_checked": True,
+    "literature_checked": True,
+}
+
+
+def builtin_pending_document() -> dict:
+    """Unreviewed observe sample: every candidate is still pending."""
+    return {
+        "run_id": "sample-from-shibi-pending",
+        "stage": "observe",
+        "request_flags": {"wants_generative_restore": False},
+        "candidates": [
+            {
+                "id": "r1",
+                "kind": "damage_annotation",
+                "region_kind": "repairable",
+                "bbox_xywh": [80, 70, 60, 40],
+                "evidence": "小块可见露底，周边有色块延续；可候选保守记录，禁止生成纹样。",
+                "uncertainty": "medium",
+                "decision": "pending",
+                "correction_note": "",
+                "reject_reason": "",
+            },
+            {
+                "id": "r2",
+                "kind": "damage_annotation",
+                "region_kind": "uncertainty",
+                "bbox_xywh": [180, 130, 140, 100],
+                "evidence": "大面积露底且周边无线稿延续；高不确定，默认不补绘。",
+                "uncertainty": "high",
+                "decision": "pending",
+                "correction_note": "",
+                "reject_reason": "",
+            },
+            {
+                "id": "r3",
+                "kind": "damage_annotation",
+                "region_kind": "unrestorable",
+                "bbox_xywh": [400, 40, 60, 240],
+                "evidence": "残片外缘紧贴现代托底，无颜料依据；禁止想象补全。",
+                "uncertainty": "irrecoverable",
+                "decision": "pending",
+                "correction_note": "",
+                "reject_reason": "",
+            },
+            {
+                "id": "lit1",
+                "kind": "literature_claim",
+                "region_kind": "repairable",
+                "bbox_xywh": [],
+                "evidence": "出处：示范著录摘录，供人工核对，不构成病害鉴定。",
+                "uncertainty": "medium",
+                "decision": "pending",
+                "correction_note": "",
+                "reject_reason": "",
+            },
+        ],
+        "checklist": {
+            "repairable_checked": False,
+            "uncertainty_checked": False,
+            "unrestorable_checked": False,
+            "literature_checked": False,
+        },
+        "reviewer": {
+            "role": "文物修复人员",
+            "name": "",
+            "confirmed": False,
+            "confirmed_at": "",
+        },
+    }
+
+
+def builtin_reviewed_document() -> dict:
+    """Reviewed observe sample: export annotation + review record, never a mural."""
+    doc = apply_bulk_decision(
+        builtin_pending_document(),
+        ui_decision="adopt",
+        note="演示复核：三色标注已核对，不生成、不补绘。",
+        checklist=DEMO_CHECKLIST_CLEAR,
+        reviewer_name="演示复核",
+        confirm=True,
+    )
+    reviewer = dict(doc.get("reviewer") or {})
+    reviewer["confirmed"] = True
+    reviewer["confirmed_at"] = "2026-11-06T10:00:00+08:00"
+    reviewer["name"] = reviewer.get("name") or "演示复核"
+    doc["reviewer"] = reviewer
+    doc["run_id"] = "sample-from-shibi-reviewed"
+    return apply_evaluate(doc)
+
+
+def candidates_from_regions(regions: list, *, run_id: str = "observe") -> dict:
+    """Build a pending gate document from a competition regions.json list."""
+    doc = {
+        "run_id": run_id,
+        "stage": "observe",
+        "request_flags": {"wants_generative_restore": False},
+        "candidates": [],
+        "reviewer": {
+            "role": "文物修复人员",
+            "name": "",
+            "confirmed": False,
+            "confirmed_at": "",
+        },
+    }
+    for region in regions or []:
+        klass = (
+            region.get("region_kind")
+            or region.get("class")
+            or region.get("region_class")
+            or region.get("class_alias")
+            or "uncertainty"
+        )
+        try:
+            from .risk_regions import normalize_region_kind
+            klass = normalize_region_kind(klass)
+        except ValueError:
+            klass = "uncertainty"
+        unc = {"repairable": "medium", "uncertainty": "high", "unrestorable": "irrecoverable"}.get(klass, "high")
+        doc["candidates"].append({
+            "id": region.get("id"),
+            "kind": "damage_annotation",
+            "region_kind": klass,
+            "bbox_xywh": region.get("bbox_xywh") or region.get("bbox") or [],
+            "evidence": region.get("evidence") or "",
+            "uncertainty": unc,
+            "decision": "pending",
+            "correction_note": "",
+            "reject_reason": "",
+        })
+    return apply_evaluate(doc)
+
+
+def load_builtin_sample(name: str) -> dict:
+    stem = (name or "").lower()
+    if "pending" in stem:
+        return apply_evaluate(builtin_pending_document())
+    if "generative" in stem or "restore" in stem:
+        doc = builtin_reviewed_document()
+        doc["request_flags"] = {"wants_generative_restore": True}
+        doc["stage"] = "enhanced_draft"
+        return apply_evaluate(doc)
+    return builtin_reviewed_document()
+
+
+OBSERVE_ZIP_FILES = (
+    "overlay_risk.png",
+    "compare_source_overlay.png",
+    "legend.png",
+    "regions.json",
+)
+_FORBIDDEN_EXPORT_NAMES = {
+    "result.png",
+    "raw.png",
+    "difference.png",
+    "restored.png",
+    "restored_image.png",
+    "generative.png",
+    "final.png",
+    "source.bin",
+}
+
+
+def forbidden_export_name(name: str) -> bool:
+    base = Path(str(name)).name.lower()
+    if base in _FORBIDDEN_EXPORT_NAMES:
+        return True
+    if "restored" in base or base.startswith("generative"):
+        return True
+    return False
+
+
+def observe_blocks_restored_export(doc: dict | None) -> bool:
+    """Observe / generative sessions must not ship a restored mural."""
+    if not doc:
+        return False
+    export = doc.get("export_allowed") or {}
+    if export.get("restored_image"):
+        return True
+    stage = doc.get("stage") or "observe"
+    if stage in {"observe", "enhanced_draft", "finalize"}:
+        return True
+    flags = doc.get("request_flags") or {}
+    return bool(flags.get("wants_generative_restore"))
+
+
+def require_observe_export(doc: dict, kind: str) -> None:
+    """Raise unless this observe document may export annotation or review only."""
+    export = doc.get("export_allowed") or {}
+    gate = doc.get("gate") or {}
+    if export.get("restored_image"):
+        raise ValueError("比赛禁止导出修复成图。")
+    if doc.get("stage") in {"enhanced_draft", "finalize"}:
+        raise ValueError(f"禁生成：stage={doc.get('stage')} 不允许进入正赛导出")
+    flags = doc.get("request_flags") or {}
+    if flags.get("wants_generative_restore"):
+        raise ValueError("禁生成：检测到生成/补绘修复请求，已拒答")
+    if gate.get("blocked") or not export.get(kind):
+        if kind == "annotation_layer":
+            raise ValueError("门禁未放行：不能导出标注层。请完成人工复核（pending/不可复原未处理会阻断）。")
+        raise ValueError("门禁未放行：不能导出复核记录。")
+
+
+def annotation_export_source(doc: dict, asset_dir: Path) -> Path:
+    require_observe_export(doc, "annotation_layer")
+    folder = Path(asset_dir)
+    for name in ("overlay_risk.png", "compare_source_overlay.png", "legend.png"):
+        src = folder / name
+        if src.is_file():
+            return src
+    raise ValueError("未找到观察标注图，请先载入比赛观察包。")
+
+
+def write_observe_zip(dest: Path, doc: dict, asset_dir: Path | None = None) -> dict:
+    """Write an observe archive that cannot contain a generative mural."""
+    import zipfile
+    require_observe_export(doc, "review_record")
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    readme = (
+        "拾壁比赛观察导出\n"
+        "- 仅含标注层 + 复核记录 + 说明\n"
+        "- restored_image=false：不含修复成图\n"
+        "- AI 标注非病害鉴定结论\n"
+    )
+    written = []
+    with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
+        zipped.writestr("gate_review.json", json.dumps(doc, ensure_ascii=False, indent=2))
+        written.append("gate_review.json")
+        zipped.writestr("README.txt", readme)
+        written.append("README.txt")
+        if asset_dir is not None:
+            folder = Path(asset_dir)
+            for name in OBSERVE_ZIP_FILES:
+                src = folder / name
+                if src.is_file() and not forbidden_export_name(name):
+                    zipped.write(src, arcname=name)
+                    written.append(name)
+    with zipfile.ZipFile(dest) as zipped:
+        leaked = [name for name in zipped.namelist() if forbidden_export_name(name)]
+        if leaked:
+            dest.unlink(missing_ok=True)
+            raise ValueError("导出含修复成图，已阻断：" + ",".join(leaked))
+    return {"saved": True, "restored_image": False, "files": written}
