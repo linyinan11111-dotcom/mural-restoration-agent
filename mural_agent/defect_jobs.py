@@ -35,8 +35,13 @@ def run_confirmed_defects(store, engine, image_id, proposal_ids, selected_method
             continue
 
         metadata = proposal.get('metadata') or {}
-        region_class = proposal.get('region_class') or metadata.get('region_class') or 'uncertain'
-        if not proposal.get('repair_allowed') or region_class != 'repairable':
+        region_class = proposal.get('region_class') or metadata.get('region_class') or 'uncertainty'
+        from .risk_regions import normalize_region_kind
+        try:
+            region_kind = normalize_region_kind(region_class)
+        except ValueError:
+            region_kind = 'uncertainty'
+        if not proposal.get('repair_allowed') or region_kind != 'repairable':
             skipped.append({'proposal_id': proposal_id,
                             'reason': metadata.get('risk_notice') or '风险分类禁止自动修补'})
             continue

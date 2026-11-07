@@ -49,10 +49,11 @@ def upload_case(client, region_class=None):
 
 
 def test_classify_component_rules():
-    assert classify_component(area_frac=0.001, mount_touch=0.0, line_score=0.0)[0] == 'fillable_lacuna'
-    assert classify_component(area_frac=0.05, mount_touch=0.0, line_score=0.0)[0] == 'uncertain'
+    assert classify_component(area_frac=0.001, mount_touch=0.0, line_score=0.0)[0] == 'repairable'
+    assert classify_component(area_frac=0.05, mount_touch=0.0, line_score=0.0)[0] == 'uncertainty'
     assert classify_component(area_frac=0.02, mount_touch=0.2, line_score=0.0)[0] == 'unrestorable'
-    assert classify_component(area_frac=0.05, mount_touch=0.0, line_score=0.05)[0] == 'fillable_lacuna'
+    assert classify_component(area_frac=0.05, mount_touch=0.0, line_score=0.05)[0] == 'uncertainty'
+    assert classify_component(area_frac=0.05, mount_touch=0.0, line_score=0.40)[0] == 'repairable'
 
 
 def test_classify_mask_and_overlay_shapes():
@@ -62,7 +63,7 @@ def test_classify_mask_and_overlay_shapes():
     lacuna = np.zeros((80, 120), dtype=np.uint8)
     lacuna[10:70, 20:100] = 255  # large hole
     risk = classify_mask_regions(rgb, lacuna)
-    assert risk['region_class'] in {'uncertain', 'unrestorable', 'fillable_lacuna'}
+    assert risk['region_class'] in {'uncertainty', 'unrestorable', 'repairable'}
     assert 'regions' in risk
     overlay = render_risk_overlay(rgb, risk['class_masks'])
     assert overlay.shape == rgb.shape
@@ -85,8 +86,8 @@ def test_apply_region_action_and_aggregate():
         {'id': 2, 'region_class': 'fillable_lacuna', 'status': 'proposed', 'evidence': 'y'},
     ]
     updated = apply_region_action(regions, 1, 'confirm_fillable')
-    assert updated[0]['region_class'] == 'fillable_lacuna'
-    assert aggregate_region_class(r['region_class'] for r in updated) == 'fillable_lacuna'
+    assert updated[0]['region_class'] == 'repairable'
+    assert aggregate_region_class(r['region_class'] for r in updated) == 'repairable'
     refused = apply_region_action(regions, 1, 'refuse_skip')
     assert refused[0]['status'] == 'refused'
 
@@ -98,7 +99,7 @@ def test_professional_create_blocks_uncertain_without_force():
             mask, rationale='可见露底', evidence_level='conservative', mode='conservative')
     meta = validate_professional_create(
         mask, rationale='专家复核后强制小范围保守', evidence_level='conservative',
-        mode='conservative', expert_force_override=True)
+        mode='conservative', expert_force_override=True, mask_gate_confirmed=True)
     assert meta['expert_force_override'] is True
 
 
@@ -133,6 +134,7 @@ def test_api_job_force_override_allows_conservative(workbench):
         'workflow': 'professional_step', 'rationale': '专家强制：仅保守纹理，不生成纹样',
         'evidence_level': 'conservative', 'backend': 'opencv',
         'expert_force_override': True, 'region_class': 'uncertain',
+        'mask_gate_confirmed': True,
     })
     assert response.status_code == 202, response.text
 

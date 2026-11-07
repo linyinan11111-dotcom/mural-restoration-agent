@@ -34,7 +34,7 @@
   const setBusy = (value) => {
     state.running = value;
     document.body.classList.toggle('busy', value);
-    $('[data-action="run-repair"]').disabled = value || !state.image || !maskHasPixels();
+    $('[data-action="run-repair"]').disabled = value || !state.image || !maskHasPixels() || isObserveMode();
     $$('[data-action="open-image"], [data-action="load-demo"], [data-action="load-competition-demo"]').forEach(button => { button.disabled = value; });
     $$('.history-item').forEach(item => { item.disabled = value; });
   };
@@ -100,8 +100,18 @@
     const archiveBtn = $('[data-action="export-archive"]');
     const confirmBtn = $('[data-action="select-candidate"]');
     const sampleBtn = $('[data-action="load-gate-reviewed-sample"]');
+    const saveBtn = $('[data-action="save-result"]');
+    const runBtn = $('[data-action="run-repair"]');
+    if (runBtn && observe) runBtn.disabled = true;
     if (overlayBtn) overlayBtn.disabled = observe ? !canAnno : !state.image;
-    if (archiveBtn) archiveBtn.disabled = observe ? !canReview : !state.job?.selected_id;
+    if (archiveBtn) {
+      archiveBtn.disabled = observe ? !canReview : !state.job?.selected_id;
+      archiveBtn.textContent = observe ? '导出复核档案' : '导出修复档案';
+    }
+    if (saveBtn && observe) {
+      saveBtn.disabled = true;
+      saveBtn.title = '比赛观察模式禁止保存修复成图';
+    }
     if (confirmBtn) {
       if (observe) {
         confirmBtn.disabled = false;
@@ -187,7 +197,7 @@
     // Disable run when unrestorable present
     const blocked = on && hasUnrestorableRegions();
     const runBtn = $('[data-action="run-repair"]');
-    if (runBtn && blocked) runBtn.disabled = true;
+    if (runBtn && (blocked || isObserveMode())) runBtn.disabled = true;
     syncGateExportButtons();
   };
   const fileUrl = (value) => value || '';
@@ -384,7 +394,7 @@
       return;
     }
     list.innerHTML = regions.map(r => {
-      const klass = r.class || r.class_alias || 'uncertainty';
+      const klass = r.region_kind || r.class || r.region_class || r.class_alias || 'uncertainty';
       const chip = CLASS_CHIP[klass] || 'chip-uncertainty';
       const allowed = r.repair_allowed ? '可候选保守填（须人工）' : '禁绘 / 不填色';
       const evidence = (r.evidence || '').replace(/</g, '&lt;');
@@ -1114,7 +1124,9 @@
         case 'zoom-in': state.zoom = Math.min(3, state.zoom * 1.15); updateCanvasSize(); break;
         case 'zoom-out': state.zoom = Math.max(.5, state.zoom / 1.15); updateCanvasSize(); break;
         case 'zoom-fit': state.zoom = 1; updateCanvasSize(); break;
-        case 'run-repair': await createJob(); break;
+        case 'run-repair':
+          if (isObserveMode()) return toast('比赛观察模式不生成修复成图；请复核标注后导出标注层或复核档案。');
+          await createJob(); break;
         case 'auto-restore': {
           if (!state.image) return toast('请先打开一幅壁画。');
           if (state.running || state.autoBusy) return toast('已有任务或 AI 分析在执行，请稍候。');
@@ -1142,7 +1154,9 @@
           }
           break;
         }
-        case 'run-all-defects': await runDefectRepairs(state.damageItems.map((_, index) => index)); break;
+        case 'run-all-defects':
+          if (isObserveMode()) return toast('比赛观察模式不生成修复成图；请复核标注后导出标注层或复核档案。');
+          await runDefectRepairs(state.damageItems.map((_, index) => index)); break;
         case 'cancel-job': { const identifier = state.activeJobId || state.job?.id; if (identifier) { await invoke('cancelJob', identifier); } await refresh(); break; }
         case 'resume-job': if (state.job) await invoke('resumeJob', state.job.id); await refresh(); break;
         case 'select-candidate': {
@@ -1210,7 +1224,9 @@
           toast('已导出标红对照图。');
           break;
         }
-        case 'save-result': if (state.candidate) {
+        case 'save-result':
+          if (isObserveMode()) return toast(DEMO_COPY.B.refuse);
+          if (state.candidate) {
           try { await invoke('saveResult', state.candidate.id); } catch (error) { notifyError(error); }
         } break;
         case 'export-archive': {

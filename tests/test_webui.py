@@ -309,6 +309,64 @@ def test_swipe_comparison_keeps_both_images_on_the_same_rect(window, qt_app):
     assert abs(frame[0] / frame[1] - 960 / 640) < 0.02, frame
 
 
+def test_competition_observe_gate_blocks_then_releases_annotation_export(window, qt_app):
+    """Narrow window still shows 比赛观察包; unreviewed export stays blocked."""
+    window.resize(960, 700)
+    qt_app.processEvents()
+    visible = run_js(window, """(() => {
+      const button = document.querySelector('[data-action="load-competition-demo"]');
+      if (!button) return false;
+      const style = getComputedStyle(button);
+      return style.display !== 'none' && style.visibility !== 'hidden';
+    })()""")
+    assert visible is True
+    assert run_js(window, "document.querySelector('[data-action=\"load-competition-demo\"]').click(); true") is True
+    assert wait_until(
+        qt_app, lambda: run_js(window, 'Boolean(window.__shibui.state.observe && window.__shibui.state.observe.gate)') is True, 20)
+    pending = json.loads(run_js(window, """JSON.stringify({
+      blocked: Boolean(window.__shibui.state.observe.gate.blocked),
+      restored: window.__shibui.state.observe.export_allowed.restored_image,
+      archiveDisabled: document.querySelector('[data-action="export-archive"]').disabled,
+      overlayDisabled: document.querySelector('[data-action="export-overlay"]').disabled,
+      saveDisabled: document.querySelector('[data-action="save-result"]').disabled,
+      archiveLabel: document.querySelector('[data-action="export-archive"]').textContent,
+      sampleHidden: document.querySelector('[data-action="load-gate-reviewed-sample"]').classList.contains('hidden'),
+      kinds: [...document.querySelectorAll('.observe-region')].map(node => node.className)
+    })"""))
+    assert pending['blocked'] is True
+    assert pending['restored'] is False
+    assert pending['archiveDisabled'] is True
+    assert pending['overlayDisabled'] is True
+    assert pending['saveDisabled'] is True
+    assert pending['archiveLabel'] == '导出复核档案'
+    assert pending['sampleHidden'] is False
+    assert any('chip-repairable' in name for name in pending['kinds'])
+    assert any('chip-uncertainty' in name for name in pending['kinds'])
+    assert any('chip-unrestorable' in name for name in pending['kinds'])
+
+    assert run_js(window, "document.querySelector('[data-action=\"load-gate-reviewed-sample\"]').click(); true") is True
+    assert wait_until(qt_app, lambda: run_js(
+        window, 'Boolean(window.__shibui.state.gateReview && window.__shibui.state.gateReview.export_allowed && window.__shibui.state.gateReview.export_allowed.annotation_layer)') is True, 20)
+    released = json.loads(run_js(window, """JSON.stringify({
+      blocked: Boolean(window.__shibui.state.gateReview.gate.blocked),
+      annotation: window.__shibui.state.gateReview.export_allowed.annotation_layer,
+      review: window.__shibui.state.gateReview.export_allowed.review_record,
+      restored: window.__shibui.state.gateReview.export_allowed.restored_image,
+      archiveDisabled: document.querySelector('[data-action="export-archive"]').disabled,
+      overlayDisabled: document.querySelector('[data-action="export-overlay"]').disabled,
+      saveDisabled: document.querySelector('[data-action="save-result"]').disabled
+    })"""))
+    assert released == {
+        'blocked': False,
+        'annotation': True,
+        'review': True,
+        'restored': False,
+        'archiveDisabled': False,
+        'overlayDisabled': False,
+        'saveDisabled': True,
+    }
+
+
 def test_merge_proposal_and_aux_version_contract(window, qt_app):
     demo = json.loads(window.bridge.loadDemo())
     image_id = demo['id']

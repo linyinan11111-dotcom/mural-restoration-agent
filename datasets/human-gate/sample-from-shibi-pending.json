@@ -1,0 +1,80 @@
+{
+  "run_id": "sample-from-shibi-pending",
+  "stage": "observe",
+  "request_flags": {
+    "wants_generative_restore": false
+  },
+  "candidates": [
+    {
+      "id": "r1",
+      "kind": "damage_annotation",
+      "region_kind": "repairable",
+      "bbox_xywh": [
+        80,
+        70,
+        60,
+        40
+      ],
+      "evidence": "小块可见露底，周边有色块延续；可候选保守记录，禁止生成纹样。",
+      "uncertainty": "medium",
+      "decision": "pending",
+      "correction_note": "",
+      "reject_reason": ""
+    },
+    {
+      "id": "r2",
+      "kind": "damage_annotation",
+      "region_kind": "uncertainty",
+      "bbox_xywh": [
+        180,
+        130,
+        140,
+        100
+      ],
+      "evidence": "大面积露底且周边无线稿延续；高不确定，默认不补绘。",
+      "uncertainty": "high",
+      "decision": "pending",
+      "correction_note": "",
+      "reject_reason": ""
+    },
+    {
+      "id": "r3",
+      "kind": "damage_annotation",
+      "region_kind": "unrestorable",
+      "bbox_xywh": [
+        400,
+        40,
+        60,
+        240
+      ],
+      "evidence": "残片外缘紧贴现代托底，无颜料依据；禁止想象补全。",
+      "uncertainty": "irrecoverable",
+      "decision": "pending",
+      "correction_note": "",
+      "reject_reason": ""
+    },
+    {
+      "id": "lit1",
+      "kind": "literature_claim",
+      "region_kind": "repairable",
+      "bbox_xywh": [],
+      "evidence": "出处：示范著录摘录，供人工核对，不构成病害鉴定。",
+      "uncertainty": "medium",
+      "decision": "pending",
+      "correction_note": "",
+      "reject_reason": ""
+    }
+  ],
+  "checklist": {
+    "repairable_checked": false,
+    "uncertainty_checked": false,
+    "unrestorable_checked": false,
+    "literature_checked": false
+  },
+  "reviewer": {
+    "role": "文物修复人员",
+    "name": "",
+    "confirmed": false,
+    "confirmed_at": ""
+  }
+}

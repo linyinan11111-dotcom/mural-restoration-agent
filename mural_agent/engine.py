@@ -321,6 +321,9 @@ class Engine:
         job = self.store.get('job', job_id)
         if not job.get('selected_id'):
             raise ValueError('请先选择一个候选结果。')
+        from .professional import contest_allows_pixel_export
+        if not contest_allows_pixel_export(job):
+            raise ValueError('比赛演示禁止导出生成性修复成图；仅允许标注层与复核记录。')
         if job['selected_id'] not in [c['id'] for c in job['candidates']]:
             raise ValueError('选中结果不属于当前任务。')
         candidate = self.store.get('candidate', job['selected_id'])

@@ -1,0 +1,61 @@
+{
+  "policy": "competition_observe_only",
+  "region_kind": "unrestorable",
+  "blocking": true,
+  "legend": {
+    "repairable": "orange translucent",
+    "uncertainty": "red translucent",
+    "unrestorable": "red hatch"
+  },
+  "regions": [
+    {
+      "id": "r1",
+      "region_kind": "repairable",
+      "class": "repairable",
+      "class_alias": "repairable",
+      "label": "可保守填的露底",
+      "repair_allowed": true,
+      "bbox_xywh": [
+        80,
+        70,
+        60,
+        40
+      ],
+      "evidence": "小块可见露底，周边有色块延续；可候选保守记录，禁止生成纹样。",
+      "status": "proposed"
+    },
+    {
+      "id": "r2",
+      "region_kind": "uncertainty",
+      "class": "uncertainty",
+      "class_alias": "uncertainty",
+      "label": "高不确定（须标红）",
+      "repair_allowed": false,
+      "bbox_xywh": [
+        180,
+        130,
+        140,
+        100
+      ],
+      "evidence": "大面积露底且周边无线稿延续；高不确定，默认不补绘。",
+      "status": "proposed"
+    },
+    {
+      "id": "r3",
+      "region_kind": "unrestorable",
+      "class": "unrestorable",
+      "class_alias": "unrestorable",
+      "label": "不可复原主张区（禁止补绘）",
+      "repair_allowed": false,
+      "bbox_xywh": [
+        400,
+        40,
+        60,
+        240
+      ],
+      "evidence": "残片外缘紧贴现代托底，无颜料依据；禁止想象补全。",
+      "status": "proposed"
+    }
+  ],
+  "notice": "观察标注包：橙=repairable，红半透明=uncertainty，红斜线=unrestorable。禁止生成纹样/图像。"
+}
