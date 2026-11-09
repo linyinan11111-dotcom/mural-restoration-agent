@@ -5,7 +5,7 @@
   const state = { bridge: null, image: null, job: null, candidate: null, keepEmpty: false, maskStrokes: [], regionStrokes: [], strokeOrder: [], currentStroke: null,
     baseMask: null, maskDirty: false, tool: 'brush', brushSize: 28, zoom: 1, promptPoints: [], promptLabels: [], promptBox: null,
     proposal: null, references: [], selectedReference: null, registration: null, lastSnapshot: null, toastTimer: null,
-    auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false, damageDrawMode: false, damageDraw: null };
+    auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false, damageDrawMode: false, damageDraw: null, damageJobKey: null };
   const canvas = $('#mask-canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const regionCanvas = $('#region-canvas');
@@ -464,6 +464,11 @@
       $('[data-action="auto-restore"]').disabled = Boolean(activeJob) || state.autoBusy || !state.image;
       renderJob(state.job);
       renderHistory(snapshot.jobs || []);
+      const damageJobKey = (snapshot.jobs || []).map(job => `${job.id}:${job.status}:${job.defect_proposal_id || ''}`).join('|');
+      if (state.damageItems.length && damageJobKey !== state.damageJobKey) {
+        state.damageJobKey = damageJobKey;
+        renderDamage();
+      }
       if (snapshot.aux_version !== state.auxVersion) {
         state.auxVersion = snapshot.aux_version;
         renderAux(snapshot.aux);
@@ -851,9 +856,10 @@
     if (!selected.length) return toast('没有可运行的缺损项。');
     const proposalIds = [];
     const methods = {};
-    try {
-      for (const item of selected) {
-        if (!item.proposal_id) {
+    const failed = [];
+    for (const item of selected) {
+      if (!item.proposal_id) {
+        try {
           const made = await invoke('addManualDefect', state.image.id, JSON.stringify({
             bbox: item.bbox, type: item.type, size: item.size,
           }));
@@ -861,11 +867,19 @@
           item.region_class = 'fillable_lacuna';
           item.repair_allowed = true;
           item.confirmed = true;
+        } catch (error) {
+          failed.push({ item, error });
+          continue;
         }
-        proposalIds.push(item.proposal_id);
-        if (item.selectedMethod && item.selectedMethod !== 'recommended') methods[item.proposal_id] = item.selectedMethod;
       }
-    } catch (error) { notifyError(error); return; }
+      proposalIds.push(item.proposal_id);
+      if (item.selectedMethod && item.selectedMethod !== 'recommended') methods[item.proposal_id] = item.selectedMethod;
+    }
+    if (!proposalIds.length) {
+      notifyError(failed[0]?.error || new Error('没有可运行的缺损项。'));
+      return;
+    }
+    if (failed.length) toast(`${failed.length} 项无法自动生成掩膜，已跳过；其余继续运行。`);
     const result = await invoke('runDefectRepairs', JSON.stringify({
       image_id: state.image.id, proposal_ids: proposalIds, confirmed: true, methods,
     }));
@@ -1182,7 +1196,8 @@
 
   canvas.addEventListener('pointerdown', event => {
     if (!state.image || !image.naturalWidth || state.running) return;
-    const point = pointAt(event); canvas.setPointerCapture(event.pointerId);
+    const point = pointAt(event);
+    try { canvas.setPointerCapture(event.pointerId); } catch (error) { /* synthetic/edge pointer */ }
     if (state.damageDrawMode) {
       event.preventDefault();
       state.damageDraw = { start: point, end: point };

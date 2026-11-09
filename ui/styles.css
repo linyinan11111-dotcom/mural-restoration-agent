@@ -200,8 +200,18 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 .damage-workflow .proposal-preview { height: 135px; }
 .damage-workflow.compact { border-top: 0; padding-top: 4px; }
 .damage-workflow.compact .button { width: 100%; margin-top: 7px; }
-.damage-modal-card { width: min(700px, calc(100vw - 32px)); }
-.damage-modal-card .damage-list { max-height: 42vh; margin-top: 10px; }
+.modal-card.damage-modal-card { width: min(700px, calc(100vw - 32px)); font-size: 12px; }
+.damage-modal-card .modal-head h2 { font-size: 18px; }
+.damage-modal-card > p { font-size: 12px; line-height: 1.6; }
+.damage-modal-card .damage-list { max-height: 40vh; margin-top: 10px; }
+.damage-modal-card .damage-item { font-size: 12px; padding: 11px; gap: 10px; }
+.damage-modal-card .damage-select { font-size: 12px; }
+.damage-modal-card .damage-item small { font-size: 11px; }
+.damage-modal-card .damage-method { white-space: nowrap; }
+.damage-modal-card .damage-method select { flex: 1 1 auto; min-width: 0; font-size: 11px; padding: 4px 7px; }
+.damage-modal-card .damage-item .button { font-size: 11px; min-height: 32px; }
+.damage-modal-card .damage-confirm { font-size: 11px; }
+.damage-modal-card .notice { font-size: 11px; line-height: 1.55; }
 .damage-modal-card .proposal-preview { height: 230px; }
 .damage-highlight { position: absolute; z-index: 4; display: none; border: 2px solid #ff5a36; background: rgba(255, 90, 54, .18); box-shadow: 0 0 0 1px rgba(255, 255, 255, .65) inset; pointer-events: none; }
 .damage-highlight.visible { display: block; }

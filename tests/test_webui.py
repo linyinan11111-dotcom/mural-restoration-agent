@@ -274,6 +274,8 @@ def test_damage_modal_and_manual_defect(window, qt_app):
     assert run_js(window, "document.querySelector('#damage-modal').classList.contains('hidden')") is True
     assert run_js(window, "document.querySelector('[data-action=\"open-damage-list\"]').click(); true") is True
     assert wait_until(qt_app, lambda: run_js(window, "!document.querySelector('#damage-modal').classList.contains('hidden')") is True, 10)
+    modal_width = run_js(window, "document.querySelector('.damage-modal-card').getBoundingClientRect().width")
+    assert modal_width >= 650, modal_width
 
     image_id = run_js(window, 'window.__shibui.state.image.id')
     made = json.loads(window.bridge.addManualDefect(image_id, json.dumps({
@@ -291,6 +293,26 @@ def test_damage_modal_and_manual_defect(window, qt_app):
     assert run_js(window, script) is True
     assert wait_until(qt_app, lambda: run_js(window, "document.querySelector('#damage-highlight').classList.contains('visible')") is True, 10)
     assert run_js(window, "document.querySelector('#damage-modal').classList.contains('hidden')") is True
+
+    # Draw a second defect directly through the DOM pointer handlers.
+    assert run_js(window, "document.querySelector('[data-action=\"open-damage-list\"]').click(); true") is True
+    assert run_js(window, "document.querySelector('[data-action=\"add-manual-defect\"]').click(); true") is True
+    drag = """(() => {
+      const c = document.querySelector('#mask-canvas');
+      const r = c.getBoundingClientRect();
+      const fire = (type, fx, fy, buttons) => c.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse',
+        clientX: r.left + r.width * fx, clientY: r.top + r.height * fy,
+        button: 0, buttons }));
+      fire('pointerdown', 0.55, 0.55, 1);
+      fire('pointermove', 0.75, 0.75, 1);
+      fire('pointerup', 0.75, 0.75, 0);
+      return true;
+    })()"""
+    assert run_js(window, drag) is True
+    assert wait_until(qt_app, lambda: run_js(window, 'window.__shibui.state.damageItems.length') == 2, 10)
+    assert run_js(window, "!document.querySelector('#damage-modal').classList.contains('hidden')") is True
+    assert len(window.bridge.store.list('proposal')) == 2
 
 
 def test_damage_panel_renders_candidates_and_recommendation(window, qt_app):
