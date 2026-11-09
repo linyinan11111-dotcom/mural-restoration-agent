@@ -9,8 +9,6 @@ from .imaging import sha256
 
 def execute(request):
     output = Path(request['output'])
-    if request['tool'] == 'diffusion':
-        raise RuntimeError('本机 Stable Diffusion 已停用。diffusion 改为云端生图，请在设置中配置 API Key。')
     if request['tool'] == 'research':
         adapter = json.loads(Path(request['research_adapter']).read_text(encoding='utf-8'))
         if not all(adapter.get(k) for k in ('python', 'script', 'repository_commit', 'weight_sha256', 'license')):
