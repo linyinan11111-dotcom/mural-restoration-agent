@@ -6,7 +6,7 @@
     baseMask: null, maskDirty: false, tool: 'brush', brushSize: 28, zoom: 1, promptPoints: [], promptLabels: [], promptBox: null,
     proposal: null, references: [], selectedReference: null, registration: null, lastSnapshot: null, toastTimer: null,
     auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false, damageDrawMode: false, damageDraw: null, damageJobKey: null,
-    triple: { largeJobId: null, fullJobId: null } };
+    triple: { largeJobId: null, fullJobId: null }, observe: null, gateReview: null };
   const canvas = $('#mask-canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const regionCanvas = $('#region-canvas');
@@ -32,11 +32,13 @@
     const node = $('#toast'); node.textContent = text; node.classList.remove('hidden');
     clearTimeout(state.toastTimer); state.toastTimer = setTimeout(() => node.classList.add('hidden'), 3200);
   };
+  const isObserveMode = () => Boolean(state.observe);
   const setBusy = (value) => {
     state.running = value;
     document.body.classList.toggle('busy', value);
     $('[data-action="run-repair"]').disabled = value || !state.image || !maskHasPixels();
-    $$('[data-action="open-image"], [data-action="load-demo"]').forEach(button => { button.disabled = value; });
+    $$('[data-action="open-image"], [data-action="load-demo"], [data-action="load-competition-demo"]').forEach(button => { button.disabled = value; });
+    if (isObserveMode()) $('[data-action="run-repair"]').disabled = true;
     $$('.history-item').forEach(item => { item.disabled = value; });
   };
   const maskHasPixels = () => {
@@ -225,6 +227,98 @@
             (event.clientY - rect.top) * canvas.height / rect.height];
   }
 
+  const CLASS_CHIP = {
+    repairable: 'chip-repairable', fillable_lacuna: 'chip-repairable',
+    uncertainty: 'chip-uncertainty', uncertain: 'chip-uncertainty',
+    unrestorable: 'chip-unrestorable',
+  };
+  const gateExport = () => (state.gateReview?.export_allowed || state.observe?.export_allowed || {});
+  const gateState = () => (state.gateReview?.gate || state.observe?.gate || {});
+  function syncGateExportButtons() {
+    const observe = isObserveMode();
+    const blocked = Boolean(gateState().blocked);
+    const exp = gateExport();
+    const canAnno = observe ? (!blocked && Boolean(exp.annotation_layer)) : true;
+    const canReview = observe ? (!blocked && Boolean(exp.review_record)) : Boolean(state.job?.selected_id);
+    const overlayBtn = $('[data-action="export-overlay"]');
+    const archiveBtn = $('[data-action="export-archive"]');
+    const saveBtn = $('[data-action="save-result"]');
+    const sampleBtn = $('[data-action="load-gate-reviewed-sample"]');
+    if (overlayBtn) overlayBtn.disabled = observe ? !canAnno : !state.image;
+    if (archiveBtn) {
+      archiveBtn.disabled = observe ? !canReview : !state.job?.selected_id;
+      archiveBtn.textContent = observe ? '导出复核档案' : '导出修复档案';
+    }
+    if (saveBtn && observe) {
+      saveBtn.disabled = true;
+      saveBtn.title = '比赛观察模式禁止保存修复成图';
+    }
+    if (sampleBtn) sampleBtn.classList.toggle('hidden', !observe);
+    const checklist = $('#gate-checklist');
+    if (checklist) checklist.classList.toggle('hidden', !observe);
+    const abstain = document.querySelector('input[name="review-decision"][value="abstain"]');
+    if (abstain) abstain.closest('label')?.classList.toggle('hidden', !observe);
+    const banner = $('#gate-status-banner');
+    if (banner) {
+      const text = state.gateReview?.banner || state.observe?.banner || '';
+      banner.classList.toggle('hidden', !(observe && text));
+      banner.classList.toggle('blocked', blocked);
+      banner.classList.toggle('clear', observe && !blocked);
+      banner.textContent = observe ? text : '';
+    }
+  }
+  function clearObservePack() {
+    state.observe = null;
+    state.gateReview = null;
+    $('#observe-preview')?.classList.add('hidden');
+    ['observe-overlay', 'observe-compare', 'observe-legend'].forEach(id => {
+      const img = $('#' + id); if (img) { img.removeAttribute('src'); img.classList.add('hidden'); }
+    });
+    const list = $('#observe-regions'); if (list) list.innerHTML = '';
+    syncGateExportButtons();
+  }
+  function renderObservePack(observe) {
+    state.observe = observe || null;
+    const panel = $('#observe-preview');
+    if (!panel) return;
+    if (!observe) { clearObservePack(); return; }
+    panel.classList.remove('hidden');
+    const setImg = (id, url) => {
+      const img = $('#' + id);
+      if (!img) return;
+      if (url) { img.src = url; img.classList.remove('hidden'); }
+      else { img.removeAttribute('src'); img.classList.add('hidden'); }
+    };
+    setImg('observe-overlay', observe.overlay_risk_url);
+    setImg('observe-compare', observe.compare_url);
+    setImg('observe-legend', observe.legend_url);
+    const note = $('#observe-export-note');
+    if (note) note.textContent = observe.export_note || '仅标注层 + 复核记录 + 说明，不含修复成图。';
+    const list = $('#observe-regions');
+    const regions = Array.isArray(observe.regions) ? observe.regions : [];
+    if (list) {
+      list.innerHTML = regions.map(r => {
+        const klass = r.region_kind || r.class || r.region_class || r.class_alias || 'uncertainty';
+        const chip = CLASS_CHIP[klass] || 'chip-uncertainty';
+        const label = String(r.label || klass).replace(/</g, '&lt;');
+        const evidence = String(r.evidence || '').replace(/</g, '&lt;');
+        return `<article class="observe-region ${chip}" data-region-id="${r.id}"><header><span class="region-chip">${label}</span></header><p>${evidence}</p></article>`;
+      }).join('') || '<div class="empty-inline">无区域条目</div>';
+    }
+    showView('results');
+    syncGateExportButtons();
+  }
+  function applyGatePayload(payload) {
+    if (!payload) return;
+    state.gateReview = payload;
+    if (state.observe) {
+      state.observe.gate = payload.gate;
+      state.observe.export_allowed = payload.export_allowed;
+      state.observe.banner = payload.banner;
+    }
+    syncGateExportButtons();
+  }
+
 
   function loadImage(record) {
     clearDamageHighlight(); hideModal('damage-modal'); hideModal('triple-modal');
@@ -240,6 +334,7 @@
       $('#culture-summary').classList.add('hidden');
       state.maskStrokes = []; state.regionStrokes = []; state.strokeOrder = []; state.currentStroke = null; state.baseMask = null; state.maskDirty = false;
       state.proposalIds = [];
+      clearObservePack();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (regionCtx) regionCtx.clearRect(0, 0, regionCanvas.width, regionCanvas.height);
       image.removeAttribute('src'); imageWrap.classList.add('hidden'); $('#empty-state').classList.remove('hidden');
@@ -260,6 +355,7 @@
       return Promise.resolve();
     }
     state.keepEmpty = false;
+    clearObservePack();
     state.image = record; state.job = null; state.candidate = null; state.proposal = null;
     state.registration = null; state.references = []; state.selectedReference = null;
     state.damageItems = []; state.selectedDamage = null;
@@ -1134,6 +1230,32 @@
         case 'generate-large-panel': await generateTriple('large'); break;
         case 'generate-full-panel': await generateTriple('full'); break;
         case 'load-demo': { if (state.running || state.autoBusy) return toast('任务或 AI 分析进行中，完成后再载入图像。'); const record = await invoke('loadDemo'); await loadImage(record); break; }
+        case 'load-competition-demo': {
+          if (state.running || state.autoBusy) return toast('任务或 AI 分析进行中，完成后再载入图像。');
+          const pack = await invoke('loadCompetitionDemo');
+          await loadImage(pack);
+          if (pack?.observe) {
+            pack.observe.gate = pack.gate || pack.observe.gate;
+            pack.observe.export_allowed = pack.export_allowed || pack.observe.export_allowed;
+            pack.observe.banner = pack.banner || pack.observe.banner;
+          }
+          renderObservePack(pack?.observe || null);
+          if (pack?.gate || pack?.gate_review) {
+            applyGatePayload({
+              gate: pack.gate, export_allowed: pack.export_allowed, banner: pack.banner,
+              gate_review: pack.gate_review, candidates: pack.gate_review?.candidates,
+            });
+          }
+          toast('已载入比赛观察包：原图 + 三色风险标注；门禁待人工复核（默认阻断导出）。');
+          break;
+        }
+        case 'load-gate-reviewed-sample': {
+          if (!isObserveMode() || !state.image) return toast('请先载入比赛观察包。');
+          const payload = await invoke('loadGateSample', 'sample-from-shibi-reviewed');
+          applyGatePayload(payload);
+          toast('演示样例：已复核可导出（标注层+复核记录；restored_image=false）。');
+          break;
+        }
         case 'undo': {
           if (state.currentStroke) break;
           const last = state.strokeOrder.pop();
@@ -1147,7 +1269,9 @@
         case 'zoom-in': state.zoom = Math.min(3, state.zoom * 1.15); updateCanvasSize(); break;
         case 'zoom-out': state.zoom = Math.max(.5, state.zoom / 1.15); updateCanvasSize(); break;
         case 'zoom-fit': state.zoom = 1; updateCanvasSize(); break;
-        case 'run-repair': await createJob(); break;
+        case 'run-repair':
+          if (isObserveMode()) return toast('比赛观察模式不生成修复成图；请复核标注后导出标注层或复核档案。');
+          await createJob(); break;
         case 'auto-restore': {
           if (!state.image) return toast('请先打开一幅壁画。');
           if (state.running || state.autoBusy) return toast('已有任务或 AI 分析在执行，请稍候。');
@@ -1198,6 +1322,14 @@
         } break;
         case 'export-overlay': {
           if (!state.image) return toast('请先打开一幅壁画。');
+          if (isObserveMode()) {
+            const gate = gateState();
+            const exp = gateExport();
+            if (gate.blocked || !exp.annotation_layer) return toast('门禁未放行：不能导出标注层。请先完成三色核对与复核决定。');
+            if (exp.restored_image) return toast('比赛观察模式禁止保存修复成图');
+            try { await invoke('exportObserveAnnotation', state.image.id); } catch (error) { notifyError(error); }
+            break;
+          }
           const out = document.createElement('canvas');
           out.width = canvas.width; out.height = canvas.height;
           const octx = out.getContext('2d');
@@ -1215,10 +1347,20 @@
           toast('已导出标红对照图。');
           break;
         }
-        case 'save-result': if (state.candidate) {
+        case 'save-result':
+          if (isObserveMode()) return toast('比赛观察模式禁止保存修复成图');
+          if (state.candidate) {
           try { await invoke('saveResult', state.candidate.id); } catch (error) { notifyError(error); }
         } break;
         case 'export-archive': {
+          if (isObserveMode() && state.image) {
+            const gate = gateState();
+            const exp = gateExport();
+            if (gate.blocked || !exp.review_record) return toast('门禁未放行：不能导出复核档案。');
+            if (exp.restored_image) return toast('比赛观察模式禁止保存修复成图');
+            try { await invoke('exportObserveReview', state.image.id); } catch (error) { notifyError(error); }
+            break;
+          }
           if (state.job) await invoke('exportArchive', state.job.id);
           break;
         }

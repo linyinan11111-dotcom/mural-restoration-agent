@@ -337,6 +337,28 @@ def validate_selected_export(job, candidate):
             'decision': review.get('decision')}
 
 
+def contest_allows_pixel_export(job):
+    """Block generative finals when a job is marked as a contest delivery.
+
+    Jobs outside contest mode keep main's export path, including cloud Imagine.
+    """
+    if not job or not job.get('contest_demo'):
+        return True
+    mode = (job.get('mode') or '').strip().lower()
+    level = (job.get('evidence_level') or '').strip().lower()
+    if mode in {'enhanced', 'speculative'} or level in {'enhanced', 'speculative'}:
+        return False
+    if (job.get('selected_as') or '') in {'hypothesis', 'enhanced'}:
+        return False
+    selected = job.get('selected_id')
+    for item in job.get('candidates') or []:
+        if selected and item.get('id') != selected:
+            continue
+        if item.get('speculative') or item.get('enhanced') or item.get('tool') in {'diffusion', 'imagine'}:
+            return False
+    return True
+
+
 def validate_review_decision(decision, *, require=True):
     """Hard gate: adopt / modify / reject before leaving the candidate step."""
     value = (decision or '').strip().lower()

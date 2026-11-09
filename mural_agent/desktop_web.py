@@ -43,6 +43,7 @@ class Bridge(QObject):
         self.aux_future = None
         self.aux_version = 0
         self.current_image_id = None
+        self._gate_reviews = {}
 
     def _result(self, function):
         try:
@@ -167,6 +168,172 @@ class Bridge(QObject):
             record = workspace.add_image(self.store, sample_image(), '合成纹样练习图（非文物照片）.png')
             self.current_image_id = record['id']
             return self._image(record)
+        return self._result(action)
+
+    def _competition_demo_dir(self):
+        from .contest_pack import resolve_competition_pack
+        try:
+            return resolve_competition_pack(ROOT, create=True)
+        except FileNotFoundError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @Slot(result=str)
+    def loadCompetitionDemo(self):
+        def action():
+            pack = self._competition_demo_dir()
+            source = pack / 'source.jpg'
+            record = workspace.add_image(
+                self.store, source.read_bytes(),
+                '比赛观察包 · 侧面天人残片（观察标注，非生成）.jpg')
+            self.current_image_id = record['id']
+            folder = self.store.folder(record['id'])
+            urls = {}
+            for name in ('overlay_risk.png', 'compare_source_overlay.png', 'legend.png', 'regions.json'):
+                src = pack / name
+                if not src.exists():
+                    continue
+                dest = folder / name
+                shutil.copy2(src, dest)
+                if name.endswith('.json'):
+                    continue
+                urls[name] = self._file_url(dest)
+            regions_payload = {}
+            regions_path = folder / 'regions.json'
+            if regions_path.exists():
+                regions_payload = json.loads(regions_path.read_text(encoding='utf-8'))
+            result = self._image(record)
+            result['observe'] = {
+                'policy': regions_payload.get('policy', 'competition_observe_only'),
+                'no_generative_mural': True,
+                'overlay_risk_url': urls.get('overlay_risk.png'),
+                'compare_url': urls.get('compare_source_overlay.png'),
+                'legend_url': urls.get('legend.png'),
+                'regions': regions_payload.get('regions', []),
+                'legend': regions_payload.get('legend', {}),
+                'notice': regions_payload.get('notice', ''),
+                'risk_note': '红区禁绘；AI 标注非病害鉴定结论。',
+                'export_note': '仅标注层 + 复核记录 + 说明，不含修复成图。',
+            }
+            from . import human_gate as hg
+            try:
+                gate_doc = hg.load_sample('sample-from-shibi-pending', root=ROOT)
+            except FileNotFoundError:
+                gate_doc = hg.candidates_from_regions(
+                    regions_payload.get('regions', []), run_id=f"observe-{record['id'][:8]}")
+                if not gate_doc.get('candidates'):
+                    gate_doc = hg.load_builtin_sample('sample-from-shibi-pending')
+            gate_doc = hg.apply_evaluate(gate_doc)
+            self._gate_reviews[record['id']] = gate_doc
+            payload = hg.response_payload(gate_doc)
+            result['gate_review'] = gate_doc
+            result['gate'] = payload['gate']
+            result['export_allowed'] = payload['export_allowed']
+            result['banner'] = payload['banner']
+            result['observe']['gate'] = payload['gate']
+            result['observe']['export_allowed'] = payload['export_allowed']
+            result['observe']['banner'] = payload['banner']
+            return result
+        return self._result(action)
+
+    @Slot(str, str, result=str)
+    def applyGateReview(self, image_id, review_json):
+        def action():
+            from . import human_gate as hg
+            if not self.store.get('image', image_id):
+                raise ValueError('图像记录不存在。')
+            payload = json.loads(review_json) if review_json else {}
+            doc = self._gate_reviews.get(image_id)
+            if not doc:
+                try:
+                    doc = hg.load_sample('sample-from-shibi-pending', root=ROOT)
+                except FileNotFoundError:
+                    doc = hg.load_builtin_sample('sample-from-shibi-pending')
+            sample = payload.get('sample')
+            if sample:
+                try:
+                    doc = hg.load_sample(str(sample), root=ROOT)
+                except FileNotFoundError:
+                    doc = hg.load_builtin_sample(str(sample))
+                doc = hg.apply_evaluate(doc)
+                self._gate_reviews[image_id] = doc
+                out = hg.response_payload(doc)
+                self.notify.emit(out['banner'])
+                return out
+            doc = hg.apply_bulk_decision(
+                doc,
+                ui_decision=payload.get('decision') or payload.get('ui_decision'),
+                note=payload.get('note') or payload.get('review_note') or '',
+                checklist=payload.get('checklist') or {},
+                reviewer_name=payload.get('reviewer_name') or payload.get('name') or '',
+                confirm=bool(payload.get('confirm', True)),
+                candidate_ids=payload.get('candidate_ids'),
+            )
+            self._gate_reviews[image_id] = doc
+            folder = self.store.folder(image_id)
+            (folder / 'gate_review.json').write_text(
+                json.dumps(doc, ensure_ascii=False, indent=2), encoding='utf-8')
+            out = hg.response_payload(doc)
+            self.notify.emit(out['banner'])
+            return out
+        return self._result(action)
+
+    @Slot(str, result=str)
+    def loadGateSample(self, sample_name):
+        def action():
+            from . import human_gate as hg
+            image_id = self.current_image_id
+            if not image_id:
+                raise ValueError('请先载入比赛观察包。')
+            chosen = sample_name or 'sample-from-shibi-reviewed'
+            try:
+                doc = hg.load_sample(chosen, root=ROOT)
+            except FileNotFoundError:
+                doc = hg.load_builtin_sample(chosen)
+            doc = hg.apply_evaluate(doc)
+            self._gate_reviews[image_id] = doc
+            out = hg.response_payload(doc)
+            out['sample'] = chosen
+            self.notify.emit('已载入样例复核状态（演示）：' + out['banner'])
+            return out
+        return self._result(action)
+
+    @Slot(str, result=str)
+    def exportObserveAnnotation(self, image_id):
+        def action():
+            from . import human_gate as hg
+            if not self.store.get('image', image_id):
+                raise ValueError('图像记录不存在。')
+            doc = self._gate_reviews.get(image_id) or {}
+            folder = self.store.folder(image_id)
+            source = hg.annotation_export_source(doc, folder)
+            export = doc.get('export_allowed') or {}
+            path, _ = QFileDialog.getSaveFileName(
+                None, '导出标注对照图', f'mural-annotation-{image_id[:8]}.png', 'PNG 图像 (*.png)')
+            if path:
+                shutil.copy2(source, path)
+                if export.get('review_record') and doc:
+                    side = Path(path).with_suffix('.gate_review.json')
+                    side.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding='utf-8')
+                self.notify.emit('标注对照图已导出（不含修复成图）。')
+            return {'saved': bool(path), 'restored_image': False}
+        return self._result(action)
+
+    @Slot(str, result=str)
+    def exportObserveReview(self, image_id):
+        def action():
+            from . import human_gate as hg
+            if not self.store.get('image', image_id):
+                raise ValueError('图像记录不存在。')
+            doc = self._gate_reviews.get(image_id) or {}
+            hg.require_observe_export(doc, 'review_record')
+            folder = self.store.folder(image_id)
+            path, _ = QFileDialog.getSaveFileName(
+                None, '导出观察复核档案', f'mural-observe-review-{image_id[:8]}.zip', 'ZIP 档案 (*.zip)')
+            if not path:
+                return {'saved': False, 'restored_image': False}
+            saved = hg.write_observe_zip(Path(path), doc, folder)
+            self.notify.emit('观察复核档案已导出（不含修复成图）。')
+            return saved
         return self._result(action)
 
     @Slot(str, str, str, result=str)
@@ -418,6 +585,9 @@ class Bridge(QObject):
             job = next((j for j in self.store.list('job') if any(c.get('id') == candidate_id for c in j.get('candidates') or [])), None)
             if not job:
                 raise ValueError('修复候选不存在。')
+            from .human_gate import observe_blocks_restored_export
+            if observe_blocks_restored_export(self._gate_reviews.get(job.get('image_id'))):
+                raise ValueError('比赛观察模式禁止保存修复成图；请导出标注层或复核档案。')
             if job.get('selected_id') != candidate_id:
                 raise ValueError('请先在候选对照中选择并确认该候选，再保存修复图像。')
             candidate = next(c for c in job['candidates'] if c['id'] == candidate_id)
@@ -437,6 +607,9 @@ class Bridge(QObject):
             job = self.store.get('job', job_id)
             if not job:
                 raise ValueError('修复任务不存在。')
+            from .human_gate import observe_blocks_restored_export
+            if observe_blocks_restored_export(self._gate_reviews.get(job.get('image_id'))):
+                raise ValueError('比赛观察模式禁止导出修复成图；请导出标注层或复核档案。')
             path, _ = QFileDialog.getSaveFileName(None, '导出修复档案', f'mural-{job_id[:8]}.zip', 'ZIP 档案 (*.zip)')
             if path:
                 source = self.engine.export(job_id)

@@ -37,7 +37,7 @@
       <section id="page-workbench" class="page active">
         <div class="workbench">
           <section class="center-column">
-            <div class="image-heading"><div><strong id="image-name">导入壁画图像</strong><span id="image-meta">选择本地图片开始</span></div><div class="image-actions"><button class="button" data-action="open-image">打开图像</button><button class="button subtle" data-action="load-demo">练习图</button><button class="button subtle" data-action="open-damage-list">缺损清单</button><button class="button subtle" data-action="open-triple-view">三分屏对照</button></div></div>
+            <div class="image-heading"><div><strong id="image-name">导入壁画图像</strong><span id="image-meta">选择本地图片开始</span></div><div class="image-actions"><button class="button" data-action="open-image">打开图像</button><button class="button subtle" data-action="load-demo">练习图</button><button class="button subtle contest-pack" data-action="load-competition-demo">比赛观察包</button><button class="button subtle" data-action="open-damage-list">缺损清单</button><button class="button subtle" data-action="open-triple-view">三分屏对照</button></div></div>
             <div class="view-tabs"><button class="view-tab active" data-view="edit">圈选修复区</button><button class="view-tab" data-view="results">候选对照 <span id="candidate-count" class="count">0</span></button></div>
 
             <div id="edit-view" class="view-panel active">
@@ -57,14 +57,33 @@
               <div class="comparison-toolbar"><select id="comparison-mode"><option value="compare">滑动对照</option><option value="result">修复结果</option><option value="difference">修改差异</option></select><span>原图</span><input id="compare-range" type="range" min="0" max="100" value="50"><span>候选</span><span id="candidate-device" class="muted"></span></div>
               <div id="comparison-stage" class="comparison-stage"><div class="empty-inline">选择候选查看结果</div></div>
               <div id="candidate-metrics" class="metrics-line">掩膜外像素保持不变；工程评分不代表历史真实性。</div>
+              <div id="observe-preview" class="observe-preview hidden">
+                <div class="observe-heading"><strong>比赛观察标注</strong><span class="muted">不含补绘成图 · 仅原图+风险层</span></div>
+                <div class="observe-media">
+                  <figure><img id="observe-overlay" alt="风险标注叠加"><figcaption>三色风险叠加</figcaption></figure>
+                  <figure><img id="observe-compare" alt="原图与标注对照"><figcaption>原图 | 标注对照</figcaption></figure>
+                  <figure class="observe-legend"><img id="observe-legend" alt="图例"><figcaption>图例</figcaption></figure>
+                </div>
+                <div id="observe-regions" class="observe-regions"></div>
+                <p id="observe-export-note" class="observe-export-note">仅标注层 + 复核记录 + 说明，不含修复成图。</p>
+              </div>
+              <div id="gate-status-banner" class="risk-banner soft hidden" role="status"></div>
+              <div id="gate-checklist" class="review-row decision-row gate-checklist hidden">
+                <span class="field-label">三色核对（观察）</span>
+                <label class="check-row compact"><input id="check-repairable" type="checkbox"><span>repairable（橙）已核</span></label>
+                <label class="check-row compact"><input id="check-uncertainty" type="checkbox"><span>uncertainty（红）已核</span></label>
+                <label class="check-row compact"><input id="check-unrestorable" type="checkbox"><span>unrestorable（红斜线）已核</span></label>
+                <label class="check-row compact"><input id="check-literature" type="checkbox"><span>文献已核 / 待查已标</span></label>
+              </div>
               <div class="review-row decision-row">
                 <span class="field-label">人工复核（硬门槛）</span>
                 <label class="check-row compact"><input type="radio" name="review-decision" value="adopt"><span>采纳</span></label>
                 <label class="check-row compact"><input type="radio" name="review-decision" value="modify"><span>修改后采纳</span></label>
                 <label class="check-row compact"><input type="radio" name="review-decision" value="reject"><span>驳回</span></label>
+                <label class="check-row compact hidden"><input type="radio" name="review-decision" value="abstain"><span>拒答（依据不足/禁生成）</span></label>
               </div>
-              <div class="review-row"><input id="review-note" maxlength="2000" placeholder="复核意见（选填；拒答/驳回建议填写）"><label class="check-row compact"><input id="archive-hypothesis" type="checkbox"><span>将推测结果标记为假设性建议</span></label><button class="button primary" data-action="select-candidate">确认复核决定</button><button class="button primary" data-action="export-overlay">导出标注对照图</button><button class="button" data-action="export-archive">导出修复档案</button><button class="button" data-action="save-result">保存修复图像</button></div>
-              <p class="review-footer">修复候选需人工复核；加强与推测结果不代表历史原貌。</p>
+              <div class="review-row"><input id="review-note" maxlength="2000" placeholder="复核意见（选填；拒答/驳回建议填写）"><label class="check-row compact"><input id="archive-hypothesis" type="checkbox"><span>将推测结果标记为假设性建议</span></label><button class="button primary" data-action="select-candidate">确认复核决定</button><button class="button subtle hidden" data-action="load-gate-reviewed-sample">演示：已复核可导出</button><button class="button primary" data-action="export-overlay">导出标注对照图</button><button class="button" data-action="export-archive">导出修复档案</button><button class="button" data-action="save-result">保存修复图像</button></div>
+              <p id="demo-footer" class="review-footer">修复候选需人工复核；加强与推测结果不代表历史原貌。</p>
             </div>
           </section>
 
