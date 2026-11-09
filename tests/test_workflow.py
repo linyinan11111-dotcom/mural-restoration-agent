@@ -161,6 +161,33 @@ def test_transparent_white_is_not_an_editable_mask_region():
     assert (decoded > 127).sum() == 4
 
 
+def test_defect_jobs_ignore_risk_classification(workbench):
+    """User explicitly opted out of risk gating for defect-list repairs."""
+    client, app = workbench
+    image, mask_record, original, mask = upload_case(client)
+    store, engine = app.state.store, app.state.engine
+    proposal_id = new_id()
+    folder = store.folder(proposal_id)
+    proposal_mask = np.zeros((64, 96), dtype=np.uint8)
+    proposal_mask[20:40, 30:50] = 255
+    Image.fromarray(proposal_mask).save(folder / 'mask.png')
+    store.put('proposal', {
+        'id': proposal_id, 'image_id': image['id'], 'created_at': '2026-11-09T00:00:00+00:00',
+        'fraction': float((proposal_mask > 0).mean()), 'confirmed': False,
+        'region_class': 'unrestorable', 'repair_allowed': False,
+        'metadata': {'type': 'crack', 'risk_notice': 'blocked by heuristic',
+                     'recommendation': {'backend': 'lama'}},
+    })
+    from mural_agent.defect_jobs import run_confirmed_defects
+    result = run_confirmed_defects(store, engine, image['id'], [proposal_id])
+    assert result['skipped'] == []
+    assert len(result['jobs']) == 1
+    job = result['jobs'][0]
+    assert job['defect_risk_class'] == 'unrestorable'
+    working_mask = store.get('mask', job['mask_id'])
+    assert working_mask['region_class'] == 'fillable_lacuna'
+
+
 def test_cancelled_queued_job_never_executes(workbench):
     client, app = workbench
     identifier = new_id()

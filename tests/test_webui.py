@@ -265,6 +265,34 @@ def test_auto_analyze_button_shows_defect_list_without_submitting(window, qt_app
     assert json.loads(window.bridge.snapshot())['jobs'] == []
 
 
+def test_damage_modal_and_manual_defect(window, qt_app):
+    assert run_js(window, "document.querySelector('[data-action=\"load-demo\"]').click(); true") is True
+    assert wait_until(qt_app, lambda: run_js(window, 'Boolean(window.__shibui.state.image)') is True, 30)
+    assert run_js(window, "document.querySelector('[data-action=\"open-damage-list\"]').click(); true") is True
+    assert wait_until(qt_app, lambda: run_js(window, "!document.querySelector('#damage-modal').classList.contains('hidden')") is True, 10)
+    assert run_js(window, "document.querySelector('[data-action=\"close-damage-list\"]').click(); true") is True
+    assert run_js(window, "document.querySelector('#damage-modal').classList.contains('hidden')") is True
+    assert run_js(window, "document.querySelector('[data-action=\"open-damage-list\"]').click(); true") is True
+    assert wait_until(qt_app, lambda: run_js(window, "!document.querySelector('#damage-modal').classList.contains('hidden')") is True, 10)
+
+    image_id = run_js(window, 'window.__shibui.state.image.id')
+    made = json.loads(window.bridge.addManualDefect(image_id, json.dumps({
+        'bbox': [100, 120, 360, 420], 'type': 'manual', 'size': 'manual'})))
+    defect = made['defect']
+    assert defect['proposal_id']
+    proposal = window.store.get('proposal', defect['proposal_id'])
+    assert proposal['region_class'] == 'fillable_lacuna'
+    assert proposal['repair_allowed'] is True
+    assert (window.store.folder(defect['proposal_id']) / 'mask.png').is_file()
+
+    script = ("""(() => { window.__shibui.state.damageItems = [""" + json.dumps(defect) +
+              """]; window.__shibui.renderDamage(); """
+              """document.querySelector('[data-damage="0"]').click(); return true; })()""")
+    assert run_js(window, script) is True
+    assert wait_until(qt_app, lambda: run_js(window, "document.querySelector('#damage-highlight').classList.contains('visible')") is True, 10)
+    assert run_js(window, "document.querySelector('#damage-modal').classList.contains('hidden')") is True
+
+
 def test_damage_panel_renders_candidates_and_recommendation(window, qt_app):
     script = """(() => {
       const state = window.__shibui.state;

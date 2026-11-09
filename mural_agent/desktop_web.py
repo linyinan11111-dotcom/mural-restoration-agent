@@ -180,6 +180,68 @@ class Bridge(QObject):
             return {**mask, 'file_url': self._file_url(self.store.folder(mask['id']) / 'mask.png')}
         return self._result(action)
 
+    @Slot(str, str, result=str)
+    def addManualDefect(self, image_id, payload_json):
+        """Add a user-drawn rectangular defect (normalized bbox 0..1000)."""
+        def action():
+            image = self.store.get('image', image_id)
+            if not image:
+                raise ValueError('图像记录不存在。')
+            payload = json.loads(payload_json or '{}')
+            try:
+                bbox = [int(value) for value in payload.get('bbox', [])]
+            except (TypeError, ValueError) as exc:
+                raise ValueError('手动缺损框无效。') from exc
+            if len(bbox) != 4:
+                raise ValueError('手动缺损框无效。')
+            x0, y0, x1, y1 = [max(0, min(1000, value)) for value in bbox]
+            x0, x1 = min(x0, x1), max(x0, x1)
+            y0, y1 = min(y0, y1), max(y0, y1)
+            if x1 - x0 < 3 or y1 - y0 < 3:
+                raise ValueError('手动缺损框太小，请重新框选。')
+            import numpy as np
+            with Image.open(self.store.folder(image['id']) / 'image.png') as source:
+                width, height = source.size
+            px0, px1 = round(x0 * width / 1000), round(x1 * width / 1000)
+            py0, py1 = round(y0 * height / 1000), round(y1 * height / 1000)
+            px0, px1 = max(0, px0), min(width, max(px0 + 1, px1))
+            py0, py1 = max(0, py0), min(height, max(py0 + 1, py1))
+            array = np.zeros((height, width), dtype=np.uint8)
+            array[py0:py1, px0:px1] = 255
+            if not array.any():
+                raise ValueError('手动缺损框无效。')
+            identifier = new_id()
+            folder = self.store.folder(identifier)
+            Image.fromarray(array).save(folder / 'mask.png')
+            Image.fromarray(array).save(folder / 'proposal.png')
+            metadata = {
+                'type': str(payload.get('type') or 'manual')[:40],
+                'bbox': [x0, y0, x1, y1],
+                'size': str(payload.get('size') or 'manual')[:20],
+                'confidence': 1.0,
+                'evidence': '用户手动框选的缺损区域。',
+                'recommendation': {'method': 'Telea 局部纹理传播', 'backend': 'telea'},
+                'region_class': 'fillable_lacuna',
+                'risk_regions': [],
+                'risk_notice': '手动添加，未做自动风险分类。',
+                'manual': True,
+            }
+            proposal = self.store.put('proposal', {
+                'id': identifier, 'image_id': image['id'], 'created_at': timestamp(),
+                'fraction': round(float(array.mean()), 6), 'metadata': metadata,
+                'adopted': False, 'confirmed': True, 'mask_source': 'manual',
+                'region_class': 'fillable_lacuna', 'repair_allowed': True,
+            })
+            defect = {
+                'index': 0, 'type': metadata['type'], 'bbox': metadata['bbox'],
+                'size': metadata['size'], 'confidence': 1.0,
+                'evidence': metadata['evidence'], 'recommendation': metadata['recommendation'],
+                'proposal_id': identifier, 'region_class': 'fillable_lacuna',
+                'repair_allowed': True, 'risk_notice': metadata['risk_notice'], 'confirmed': True,
+            }
+            return {'proposal': proposal, 'defect': defect}
+        return self._result(action)
+
     @Slot(str, result=str)
     def createJob(self, request_json):
         def action():
@@ -451,8 +513,6 @@ class Bridge(QObject):
             request = json.loads(request_json)
             if self.aux_future and not self.aux_future.done():
                 raise ValueError('AI 分析仍在运行，请完成后再启动修复。')
-            if not request.get('confirmed'):
-                raise ValueError('请先逐项检查并勾选确认，再启动修复。')
             from .defect_jobs import run_confirmed_defects
             result = run_confirmed_defects(
                 self.store, self.engine, request.get('image_id'),

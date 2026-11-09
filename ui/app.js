@@ -5,7 +5,7 @@
   const state = { bridge: null, image: null, job: null, candidate: null, keepEmpty: false, maskStrokes: [], regionStrokes: [], strokeOrder: [], currentStroke: null,
     baseMask: null, maskDirty: false, tool: 'brush', brushSize: 28, zoom: 1, promptPoints: [], promptLabels: [], promptBox: null,
     proposal: null, references: [], selectedReference: null, registration: null, lastSnapshot: null, toastTimer: null,
-    auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false };
+    auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false, damageDrawMode: false, damageDraw: null };
   const canvas = $('#mask-canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const regionCanvas = $('#region-canvas');
@@ -225,6 +225,9 @@
 
 
   function loadImage(record) {
+    clearDamageHighlight(); hideModal('damage-modal');
+    state.damageDrawMode = false; state.damageDraw = null;
+    $('#canvas-wrap')?.classList.remove('damage-drawing');
     if (!record) {
       state.keepEmpty = true;
       state.image = state.job = state.candidate = state.proposal = null;
@@ -461,7 +464,6 @@
       $('[data-action="auto-restore"]').disabled = Boolean(activeJob) || state.autoBusy || !state.image;
       renderJob(state.job);
       renderHistory(snapshot.jobs || []);
-      if (state.damageItems.length) renderDamage();
       if (snapshot.aux_version !== state.auxVersion) {
         state.auxVersion = snapshot.aux_version;
         renderAux(snapshot.aux);
@@ -670,6 +672,7 @@
       state.candidate = null;
       state.proposalIds = [];
       renderDamage(auto.summary || '');
+      if (state.damageItems.length) showModal('damage-modal');
       $('#damage-status').textContent = state.damageItems.length ? `识别 ${state.damageItems.length} 项` : '无候选';
       setAutoStatus(auto.summary || 'AI 分析完成，请人工核对缺损清单。');
       $('#repair-mode').value = 'conservative';
@@ -724,7 +727,7 @@
     if (result.notice) toast(result.notice);
   }
 
-  const DAMAGE_LABELS = { crack: '裂缝', paint_loss: '颜料层缺失', plaster_loss: '地仗/灰泥缺失', flaking: '起甲/剥落', stain: '污渍/变色', other: '其他疑似缺损' };
+  const DAMAGE_LABELS = { crack: '裂缝', paint_loss: '颜料层缺失', plaster_loss: '地仗/灰泥缺失', flaking: '起甲/剥落', stain: '污渍/变色', other: '其他疑似缺损', manual: '手动标注缺损' };
 
   function renderCulturalContext(context) {
     const panel = $('#culture-summary');
@@ -749,40 +752,81 @@
     return '先人工确认，再选择保守修补';
   }
 
+  function bboxPercent(bbox) {
+    const values = (bbox || [0, 0, 0, 0]).map(Number);
+    const x0 = Math.min(values[0], values[2]), y0 = Math.min(values[1], values[3]);
+    const width = Math.abs(values[2] - values[0]), height = Math.abs(values[3] - values[1]);
+    return { left: `${x0 / 10}%`, top: `${y0 / 10}%`, width: `${width / 10}%`, height: `${height / 10}%` };
+  }
+
+  function showDamageHighlight(item) {
+    const node = $('#damage-highlight');
+    if (!node || !item || !Array.isArray(item.bbox) || item.bbox.length !== 4) return;
+    Object.assign(node.style, bboxPercent(item.bbox));
+    node.classList.add('visible');
+  }
+
+  function clearDamageHighlight() {
+    const node = $('#damage-highlight');
+    if (!node) return;
+    node.classList.remove('visible');
+    node.style.left = node.style.top = node.style.width = node.style.height = '';
+  }
+
+  function openDamageModal() {
+    if (!state.image) return toast('请先打开一幅壁画。');
+    if (state.damageDrawMode) {
+      state.damageDrawMode = false; state.damageDraw = null;
+      $('#canvas-wrap')?.classList.remove('damage-drawing');
+      clearDamageHighlight();
+    }
+    renderDamage();
+    showModal('damage-modal');
+  }
+
   function renderDamage(limitations = '') {
     const list = $('#damage-list');
-    if (!state.image || !state.damageItems.length) {
-      list.innerHTML = '<div class="empty-inline">分析后逐项显示缺损和修复建议</div>';
-      $('#damage-note').textContent = 'AI 识别、类别与掩膜提取都只是候选，需人工检查；不能替代病害鉴定。' + (limitations ? ' ' + limitations : '');
+    if (!list) return;
+    const count = state.damageItems.length;
+    const status = $('#damage-status');
+    if (status) status.textContent = count ? `共 ${count} 项` : '待分析';
+    const badge = $('#damage-count');
+    if (badge) badge.textContent = String(count);
+    const runAll = $('[data-action="run-all-defects"]');
+    if (!state.image || !count) {
+      list.innerHTML = '<div class="empty-inline">点“AI 分析缺损”生成清单，或点“手动添加缺损区域”框选。</div>';
+      $('#damage-note').textContent = limitations || '所有缺损都可以尝试修复；结果不满意可以重跑。';
       $('#damage-image').classList.add('hidden'); $('#damage-empty').classList.remove('hidden');
-      $('[data-action="run-all-defects"]').disabled = true;
+      if (runAll) runAll.disabled = true;
       return;
     }
     const jobs = state.lastSnapshot?.jobs || [];
+    const busy = state.running || state.autoBusy;
     list.innerHTML = state.damageItems.map((item, index) => {
       const [x0, y0, x1, y1] = item.bbox || [0, 0, 0, 0];
       const extent = Math.max(0, (x1 - x0) * (y1 - y0)) / 100;
       const job = jobs.find(record => record.defect_proposal_id === item.proposal_id);
-      const status = job ? `任务${['review', 'completed'].includes(job.status) ? '已完成' : job.status === 'failed' ? '失败' : '进行中'}` : '';
+      const statusText = job ? `任务${['review', 'completed'].includes(job.status) ? '已完成' : job.status === 'failed' ? '失败' : '进行中'}` : '';
       const method = item.recommendation?.method || damageRecommendation(item);
       const selectedMethod = item.selectedMethod || 'recommended';
-      const blocked = !item.proposal_id || !item.repair_allowed
-        || !['fillable_lacuna', 'repairable'].includes(item.region_class);
       const alreadyQueued = job && ACTIVE.includes(job.status);
       const busy = state.running || state.autoBusy;
-      const blocker = item.risk_notice || (blocked ? '请先人工复核风险分类；当前不能一键修复。' : '');
+      const disabled = alreadyQueued || busy;
+      const hint = item.risk_notice
+        ? `风险提示（不会阻止运行）：${item.risk_notice}`
+        : (!item.proposal_id ? '暂无可用掩膜，运行时会按框自动生成矩形掩膜。' : '');
       return `<div class="damage-item ${item === state.selectedDamage ? 'selected' : ''}" data-damage-row="${index}">` +
         `<div class="damage-item-main"><button class="damage-select" data-damage="${index}">${String(index + 1).padStart(2, '0')} ${escapeHtml(DAMAGE_LABELS[item.type] || '其他疑似缺损')}</button>` +
-        `<small>${escapeHtml(item.size || 'uncertain')} · 框选约 ${extent.toFixed(2)}% · 视觉置信 ${Math.round((item.confidence || 0) * 100)}%</small>` +
-        `<small>AI 建议：${escapeHtml(method)}</small><label class="damage-method">修补方案 <select data-method-defect="${index}" ${blocked || alreadyQueued || busy ? 'disabled' : ''}>` +
-        `<option value="recommended" ${selectedMethod === 'recommended' ? 'selected' : ''}>采用 AI 建议</option>` +
-        `<option value="lama" ${selectedMethod === 'lama' ? 'selected' : ''} ${state.lastSnapshot?.models?.lama ? '' : 'disabled'}>LaMa AI 纹理补全${state.lastSnapshot?.models?.lama ? '' : '（未安装）'}</option>` +
+        `<small>${escapeHtml(item.size || 'manual')} · 框选约 ${extent.toFixed(2)}% · 置信 ${Math.round((item.confidence || 0) * 100)}%</small>` +
+        `<small>建议：${escapeHtml(method)}</small><label class="damage-method">修补方案 <select data-method-defect="${index}" ${disabled ? 'disabled' : ''}>` +
+        `<option value="recommended" ${selectedMethod === 'recommended' ? 'selected' : ''}>采用建议</option>` +
+        `<option value="lama" ${selectedMethod === 'lama' ? 'selected' : ''} ${state.lastSnapshot?.models?.lama ? '' : 'disabled'}>LaMa AI 纹理补全${state.lastSnapshot?.models?.lama ? '' : '（未安装，将回退 Telea）'}</option>` +
         `<option value="telea" ${selectedMethod === 'telea' ? 'selected' : ''}>Telea 局部纹理传播</option>` +
         `<option value="ns" ${selectedMethod === 'ns' ? 'selected' : ''}>Navier–Stokes 细线修补</option>` +
         `<option value="color" ${selectedMethod === 'color' ? 'selected' : ''}>局部色调匹配</option></select></label>` +
-        `${blocker ? `<small>${escapeHtml(blocker)}</small>` : ''}${status ? `<small>${status}</small>` : ''}</div>` +
-        `<div class="damage-item-actions"><label class="damage-confirm"><input type="checkbox" data-confirm-defect="${index}" ${item.confirmed ? 'checked' : ''} ${blocked || alreadyQueued || busy ? 'disabled' : ''}>确认</label>` +
-        `<button class="button" data-run-defect="${index}" ${blocked || alreadyQueued || busy ? 'disabled' : ''}>运行修复</button></div></div>`;
+        `${hint ? `<small>${escapeHtml(hint)}</small>` : ''}${statusText ? `<small>${statusText}</small>` : ''}</div>` +
+        `<div class="damage-item-actions"><label class="damage-confirm"><input type="checkbox" data-confirm-defect="${index}" ${item.confirmed ? 'checked' : ''} ${disabled ? 'disabled' : ''}>确认</label>` +
+        `<button class="button" data-run-defect="${index}" ${disabled ? 'disabled' : ''}>运行修复</button></div></div>`;
     }).join('');
     $$('[data-damage]').forEach(button => button.addEventListener('click', () => selectDamage(Number(button.dataset.damage))));
     $$('[data-confirm-defect]').forEach(input => input.addEventListener('change', () => {
@@ -793,26 +837,44 @@
       state.damageItems[Number(select.dataset.methodDefect)].selectedMethod = select.value;
     }));
     $$('[data-run-defect]').forEach(button => button.addEventListener('click', () => runDefectRepairs([Number(button.dataset.runDefect)]).catch(notifyError)));
-    $('#damage-note').textContent = (limitations || '') || 'AI 识别、类别与掩膜提取都只是候选，需人工检查；不能替代病害鉴定。';
-    if (state.selectedDamage === null) selectDamage(0);
-    $('[data-action="run-all-defects"]').disabled = state.running || state.autoBusy || !state.damageItems.some(item => item.confirmed && item.proposal_id && item.repair_allowed && ['fillable_lacuna', 'repairable'].includes(item.region_class) && !jobs.some(job => job.defect_proposal_id === item.proposal_id && ACTIVE.includes(job.status)));
+    const first = state.damageItems[0];
+    $('#damage-note').textContent = `${limitations || ''} 首项建议：${damageRecommendation(first)}。所有项都可以尝试修复，结果不满意可重跑。`;
+    if (runAll) {
+      runAll.disabled = busy || !state.damageItems.some(item => !jobs.some(job => job.defect_proposal_id === item.proposal_id && ACTIVE.includes(job.status)));
+    }
   }
 
   async function runDefectRepairs(indexes) {
+    if (!state.image) return toast('请先打开一幅壁画。');
     if (state.running || state.autoBusy) return toast('请等待当前分析或修复任务完成。');
-    const selected = indexes.map(index => state.damageItems[index]).filter(item => item && item.confirmed && item.proposal_id && item.repair_allowed && ['fillable_lacuna', 'repairable'].includes(item.region_class));
-    if (!selected.length) return toast('请先确认至少一个可保守修复的缺损项。');
+    const selected = indexes.map(index => state.damageItems[index]).filter(Boolean);
+    if (!selected.length) return toast('没有可运行的缺损项。');
+    const proposalIds = [];
+    const methods = {};
+    try {
+      for (const item of selected) {
+        if (!item.proposal_id) {
+          const made = await invoke('addManualDefect', state.image.id, JSON.stringify({
+            bbox: item.bbox, type: item.type, size: item.size,
+          }));
+          item.proposal_id = made.defect.proposal_id;
+          item.region_class = 'fillable_lacuna';
+          item.repair_allowed = true;
+          item.confirmed = true;
+        }
+        proposalIds.push(item.proposal_id);
+        if (item.selectedMethod && item.selectedMethod !== 'recommended') methods[item.proposal_id] = item.selectedMethod;
+      }
+    } catch (error) { notifyError(error); return; }
     const result = await invoke('runDefectRepairs', JSON.stringify({
-      image_id: state.image.id, proposal_ids: selected.map(item => item.proposal_id), confirmed: true,
-      methods: Object.fromEntries(selected.filter(item => item.selectedMethod && item.selectedMethod !== 'recommended')
-        .map(item => [item.proposal_id, item.selectedMethod])),
+      image_id: state.image.id, proposal_ids: proposalIds, confirmed: true, methods,
     }));
     const count = result.jobs?.length || 0;
     if (!count) {
-      const reason = result.skipped?.[0]?.reason || '当前没有可运行的缺损项。';
-      toast(reason);
+      toast(result.skipped?.[0]?.reason || '当前没有可运行的缺损项。');
       return;
     }
+    hideModal('damage-modal');
     const skipped = result.skipped?.length ? `；跳过 ${result.skipped.length} 项：${result.skipped[0].reason}` : '';
     toast(`已启动 ${count} 个修复任务${skipped}。`);
     await refresh();
@@ -823,10 +885,11 @@
     const item = state.damageItems[index];
     if (!item || !state.image) return;
     state.selectedDamage = item;
-    $$('.damage-item').forEach((button, position) => button.classList.toggle('selected', position === index));
-    const [x0, y0, x1, y1] = item.bbox || [0, 0, 0, 0];
-    const fraction = Math.max(0, (x1 - x0) * (y1 - y0)) / 100;
-    $('#damage-note').textContent = `疑似${DAMAGE_LABELS[item.type] || '缺损'}，AI 估计 ${item.size}，框选约 ${fraction.toFixed(2)}% 图像面积；建议：${damageRecommendation(item)}。视觉置信 ${Math.round((item.confidence || 0) * 100)}% 不是病害概率。依据：${item.evidence || '无文字依据'}。请先检查红框是否落在真实损伤上。`;
+    showDamageHighlight(item);
+    renderDamage();
+    hideModal('damage-modal');
+    showPage('workbench'); showView('edit');
+    toast(`已框出第 ${index + 1} 项；再次打开“缺损清单”可继续操作。`);
     try {
       const preview = await invoke('damagePreview', state.image.id, JSON.stringify(item));
       if (preview?.file_url) {
@@ -834,6 +897,61 @@
         $('#damage-image').classList.remove('hidden'); $('#damage-empty').classList.add('hidden');
       }
     } catch (error) { console.warn(error); }
+  }
+
+  function beginManualDamage() {
+    if (!state.image) return toast('请先打开一幅壁画。');
+    if (state.running || state.autoBusy) return toast('请等待当前修复或 AI 分析完成。');
+    hideModal('damage-modal');
+    state.damageDrawMode = true;
+    state.damageDraw = null;
+    showPage('workbench'); showView('edit');
+    $('#canvas-wrap').classList.add('damage-drawing');
+    toast('在图像上拖动框选缺损区域；按 Esc 取消。');
+  }
+
+  function updateDamageDraft() {
+    const drawing = state.damageDraw;
+    if (!drawing || !canvas.width || !canvas.height) return;
+    const x0 = Math.min(drawing.start[0], drawing.end[0]) / canvas.width * 1000;
+    const y0 = Math.min(drawing.start[1], drawing.end[1]) / canvas.height * 1000;
+    const x1 = Math.max(drawing.start[0], drawing.end[0]) / canvas.width * 1000;
+    const y1 = Math.max(drawing.start[1], drawing.end[1]) / canvas.height * 1000;
+    const node = $('#damage-highlight');
+    if (!node) return;
+    Object.assign(node.style, bboxPercent([x0, y0, x1, y1]));
+    node.classList.add('visible');
+  }
+
+  async function finishDamageDraw() {
+    const drawing = state.damageDraw;
+    if (!drawing || !state.image) return;
+    state.damageDraw = null;
+    state.damageDrawMode = false;
+    $('#canvas-wrap').classList.remove('damage-drawing');
+    const x0 = Math.min(drawing.start[0], drawing.end[0]) / canvas.width * 1000;
+    const y0 = Math.min(drawing.start[1], drawing.end[1]) / canvas.height * 1000;
+    const x1 = Math.max(drawing.start[0], drawing.end[0]) / canvas.width * 1000;
+    const y1 = Math.max(drawing.start[1], drawing.end[1]) / canvas.height * 1000;
+    if (x1 - x0 < 4 || y1 - y0 < 4) {
+      clearDamageHighlight();
+      toast('框选太小，请重新拖动一个更大的区域。');
+      return;
+    }
+    const bbox = [x0, y0, x1, y1].map(value => Math.round(value));
+    try {
+      const made = await invoke('addManualDefect', state.image.id, JSON.stringify({ bbox, type: 'manual', size: 'manual' }));
+      const item = made.defect;
+      state.damageItems.push(item);
+      state.selectedDamage = item;
+      showDamageHighlight(item);
+      renderDamage();
+      showModal('damage-modal');
+      toast('已添加手动缺损；点“运行修复”或“运行全部”即可开始。');
+    } catch (error) {
+      notifyError(error);
+      clearDamageHighlight();
+    }
   }
 
   function renderReferences(records) {
@@ -882,6 +1000,9 @@
           if (state.running || state.autoBusy) return toast('任务或 AI 分析进行中，完成后再新建任务。');
           await loadImage(null); state.image = null; $('#empty-state').classList.remove('hidden'); imageWrap.classList.add('hidden'); break;
         case 'open-image': await openImage(); break;
+        case 'open-damage-list': openDamageModal(); break;
+        case 'close-damage-list': hideModal('damage-modal'); break;
+        case 'add-manual-defect': beginManualDamage(); break;
         case 'load-demo': { if (state.running || state.autoBusy) return toast('任务或 AI 分析进行中，完成后再载入图像。'); const record = await invoke('loadDemo'); await loadImage(record); break; }
         case 'undo': {
           if (state.currentStroke) break;
@@ -1062,6 +1183,12 @@
   canvas.addEventListener('pointerdown', event => {
     if (!state.image || !image.naturalWidth || state.running) return;
     const point = pointAt(event); canvas.setPointerCapture(event.pointerId);
+    if (state.damageDrawMode) {
+      event.preventDefault();
+      state.damageDraw = { start: point, end: point };
+      updateDamageDraft();
+      return;
+    }
     if (state.tool === 'sam-point') {
       state.promptPoints.push(point); state.promptLabels.push(event.button === 2 ? 0 : 1); toast('已记录分割提示点。'); return;
     }
@@ -1072,6 +1199,11 @@
     paintStroke(state.currentStroke); state.maskDirty = true; setBusy(state.running);
   });
   canvas.addEventListener('pointermove', event => {
+    if (state.damageDraw) {
+      state.damageDraw.end = pointAt(event);
+      updateDamageDraft();
+      return;
+    }
     if (state.currentStroke) {
       state.currentStroke.points.push(pointAt(event));
       redrawMask();
@@ -1079,6 +1211,10 @@
     if (state.tool === 'sam-box' && state.promptBox && event.buttons) state.promptBox.splice(2, 2, ...pointAt(event));
   });
   canvas.addEventListener('pointerup', () => {
+    if (state.damageDraw) {
+      finishDamageDraw().catch(notifyError);
+      return;
+    }
     if (!state.currentStroke) return;
     if (isRegionTool(state.currentStroke.tool)) {
       state.regionStrokes.push(state.currentStroke); state.strokeOrder.push('region');
@@ -1098,7 +1234,16 @@
     if (event.key.toLowerCase() === 'b') setTool('brush');
     if (event.key.toLowerCase() === 'e') setTool('eraser');
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); handleAction('undo'); }
-    if (event.key === 'Escape') { ['settings-modal', 'reference-modal', 'verify-modal'].forEach(hideModal); }
+    if (event.key === 'Escape') {
+      if (state.damageDrawMode) {
+        state.damageDrawMode = false; state.damageDraw = null;
+        $('#canvas-wrap').classList.remove('damage-drawing');
+        clearDamageHighlight();
+        toast('已取消手动框选。');
+        return;
+      }
+      ['settings-modal', 'reference-modal', 'verify-modal', 'damage-modal'].forEach(hideModal);
+    }
   });
 
   new QWebChannel(qt.webChannelTransport, channel => {

@@ -1,4 +1,9 @@
-"""Create one independently reviewable conservative job per confirmed defect."""
+"""Create one independently reviewable conservative job per confirmed defect.
+
+Defect-list repairs are intentionally not filtered by the heuristic risk
+classes: the user asked to attempt every listed defect and simply re-run when a
+result is bad. Original risk metadata is still recorded on the job.
+"""
 from . import workspace
 
 ACTIVE_JOB_STATES = {'queued', 'planning', 'running', 'evaluating'}
@@ -36,31 +41,31 @@ def run_confirmed_defects(store, engine, image_id, proposal_ids, selected_method
 
         metadata = proposal.get('metadata') or {}
         from .risk_regions import normalize_region_kind
-        region_class = normalize_region_kind(
+        risk_class = normalize_region_kind(
             proposal.get('region_class') or metadata.get('region_class') or 'uncertain')
-        if not proposal.get('repair_allowed') or region_class != 'fillable_lacuna':
-            skipped.append({'proposal_id': proposal_id,
-                            'reason': metadata.get('risk_notice') or '风险分类禁止自动修补'})
-            continue
 
-        backend = selected_methods.get(proposal_id) or (metadata.get('recommendation') or {}).get('backend')
+        backend = selected_methods.get(proposal_id) or (metadata.get('recommendation') or {}).get('backend') or 'telea'
         if backend not in METHODS:
-            skipped.append({'proposal_id': proposal_id, 'reason': '请选择支持的修补方案'})
-            continue
+            backend = 'telea'
+        # Do not skip unavailable LaMa: fall back to a local classical method so
+        # every confirmed defect can still be attempted.
         if backend == 'lama' and not availability.get('lama'):
-            skipped.append({'proposal_id': proposal_id, 'reason': 'LaMa 未安装，请改选 Telea 或 Navier–Stokes'})
-            continue
+            backend = 'telea'
 
         item_type = str(metadata.get('type') or '疑似缺损')[:80]
         method = METHODS[backend]
         manual = proposal_id in selected_methods
         source = '按人工选择' if manual else '按 AI 建议'
-        rationale = f'人工确认的{item_type}候选；{source}采用{method}。结果仅供修复人员复核。'
+        rationale = (
+            f'人工确认的{item_type}候选；{source}采用{method}。'
+            f'原风险分类：{risk_class}（本路径按用户要求不拦截）。结果仅供修复人员复核。'
+        )
+        # Defect-list repairs bypass the risk gate by creating an explicit
+        # fillable working mask; the original class stays on the job record.
         mask = workspace.add_mask(
             store, image, (store.folder(proposal_id) / 'mask.png').read_bytes(),
             [proposal_id], mask_source=proposal.get('mask_source') or 'ai_candidate',
-            user_confirmed=True, region_class=region_class,
-            risk_regions=metadata.get('risk_regions') or [])
+            user_confirmed=True, region_class='fillable_lacuna', risk_regions=[])
         job = workspace.create_job(
             store, engine, image, mask, backend, 'rules', 1,
             rationale + ' ' + str(metadata.get('evidence') or ''), mode='conservative',
@@ -70,7 +75,9 @@ def run_confirmed_defects(store, engine, image_id, proposal_ids, selected_method
             mask_source=proposal.get('mask_source') or 'ai_candidate',
             mask_gate_confirmed=True)
         job = store.update('job', job['id'], defect_proposal_id=proposal_id,
-                           defect_type=item_type, recommended_method=method)
+                           defect_type=item_type, recommended_method=method,
+                           defect_risk_class=risk_class,
+                           defect_risk_notice=str(metadata.get('risk_notice') or ''))
         history = list(proposal.get('repair_job_history') or [])
         if previous_id and previous_id not in history:
             history.append(previous_id)

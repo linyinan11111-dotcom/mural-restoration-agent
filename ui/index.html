@@ -37,7 +37,7 @@
       <section id="page-workbench" class="page active">
         <div class="workbench">
           <section class="center-column">
-            <div class="image-heading"><div><strong id="image-name">导入壁画图像</strong><span id="image-meta">选择本地图片开始</span></div><div class="image-actions"><button class="button" data-action="open-image">打开图像</button><button class="button subtle" data-action="load-demo">练习图</button></div></div>
+            <div class="image-heading"><div><strong id="image-name">导入壁画图像</strong><span id="image-meta">选择本地图片开始</span></div><div class="image-actions"><button class="button" data-action="open-image">打开图像</button><button class="button subtle" data-action="load-demo">练习图</button><button class="button subtle" data-action="open-damage-list">缺损清单</button></div></div>
             <div class="view-tabs"><button class="view-tab active" data-view="edit">圈选修复区</button><button class="view-tab" data-view="results">候选对照 <span id="candidate-count" class="count">0</span></button></div>
 
             <div id="edit-view" class="view-panel active">
@@ -47,7 +47,7 @@
               </div>
               <div id="image-stage" class="image-stage">
                 <div id="empty-state" class="empty-state"><div class="empty-icon"><span></span></div><strong>把一幅壁画带入工作台</strong><p>原图会单独保存，修复只作用于你圈选的区域。</p><button class="button primary" data-action="open-image">选择图像</button></div>
-                <div id="canvas-wrap" class="canvas-wrap hidden"><img id="source-image" draggable="false"><canvas id="mask-canvas"></canvas><canvas id="region-canvas" class="region-canvas"></canvas></div>
+                <div id="canvas-wrap" class="canvas-wrap hidden"><img id="source-image" draggable="false"><canvas id="mask-canvas"></canvas><canvas id="region-canvas" class="region-canvas"></canvas><div id="damage-highlight" class="damage-highlight"></div></div>
               </div>
               <div class="canvas-footer"><span id="mask-status">琥珀=可修露底 · 红=不确定 · 深红斜线=不可复原</span><span>Ctrl + 滚轮缩放 · B 画笔 · E 橡皮</span></div>
             </div>
@@ -73,12 +73,10 @@
               <button class="button primary ai-start-button" data-action="auto-restore" id="auto-button" disabled>AI 分析缺损与文化线索</button>
               <small id="auto-status" class="field-note">先识别原图已有损伤、描述可见文化线索并生成待确认选区。</small>
               <section id="culture-summary" class="culture-summary hidden" aria-live="polite"></section>
-              <section class="damage-workflow">
-                <div class="section-title"><span>缺损清单</span><span id="damage-status" class="quiet-badge">待分析</span></div>
-                <div class="action-row"><button class="button primary" data-action="run-all-defects" disabled>运行全部已确认项</button></div>
-                <div id="damage-list" class="damage-list"><div class="empty-inline">分析后逐项显示缺损和修复建议</div></div>
-                <div id="damage-note" class="notice">AI 识别和类别只是候选；请核对图像证据。只有允许修补的项目才能运行。</div>
-                <div class="proposal-preview"><img id="damage-image" class="hidden"><div id="damage-empty" class="empty-inline">选中一项查看原图定位</div></div>
+              <section class="damage-workflow compact">
+                <div class="section-title"><span>缺损清单</span><span id="damage-count" class="quiet-badge">0</span></div>
+                <button class="button primary" data-action="open-damage-list">打开缺损清单</button>
+                <small class="field-note">弹窗内逐项查看、手动添加缺损，并统一开始修复。</small>
               </section>
               <details class="manual-repair-settings"><summary>手动画布修复</summary>
                 <label class="check-row"><input id="mask-gate-confirmed" type="checkbox"><span>我已检查并确认红色选区确实需要修复</span></label>
@@ -135,6 +133,7 @@
   <div id="settings-modal" class="modal hidden"><div class="modal-backdrop" data-action="close-settings"></div><div class="modal-card"><div class="modal-head"><h2>视觉 API 设置</h2><button class="icon-button" data-action="close-settings" aria-label="关闭">×</button></div><p>仅在选择 API 规划器时发送缩略图、掩膜预览和备注。</p><label>接口协议<select id="api-kind"><option value="responses">Responses</option><option value="chat_completions">Chat Completions 兼容服务</option></select></label><label>服务根地址<input id="api-base" placeholder="https://api.openai.com/v1"></label><label>视觉模型<input id="api-model" placeholder="账户可用的视觉模型"></label><label>API 密钥<input id="api-key" type="password" autocomplete="new-password" placeholder="留空以保留当前密钥"></label><label class="check-row"><input id="api-json" type="checkbox" checked><span>启用 JSON 输出格式</span></label><div id="api-error" class="error-text"></div><div class="modal-actions"><button class="button" data-action="close-settings">取消</button><button class="button primary" data-action="save-settings">保存设置</button></div></div></div>
   <div id="reference-modal" class="modal hidden"><div class="modal-backdrop" data-action="close-reference"></div><div class="modal-card"><div class="modal-head"><h2>导入参考资料</h2><button class="icon-button" data-action="close-reference" aria-label="关闭">×</button></div><p>来源与许可会写入修复档案；视觉相似不等于历史证据。</p><label>来源 URL 或馆藏编号<input id="ref-source" placeholder="https://... 或馆藏号"></label><label>许可或使用依据<input id="ref-license" placeholder="CC0 / 授权说明"></label><label>壁画 / 洞窟分组<input id="ref-group" placeholder="同一壁画的图像填相同分组"></label><label>对应关系<select id="ref-relation"><option value="same_mural">同一壁画</option><option value="tracing">线稿/摹本</option><option value="related">同题材相关</option></select></label><div id="ref-error" class="error-text"></div><div class="modal-actions"><button class="button" data-action="close-reference">取消</button><button class="button primary" data-action="save-reference">导入</button></div></div></div>
   <div id="verify-modal" class="modal hidden"><div class="modal-backdrop" data-action="close-verify"></div><div class="modal-card"><div class="modal-head"><h2>核验可应用区域</h2><button class="icon-button" data-action="close-verify" aria-label="关闭">×</button></div><p>当前掩膜就是允许从参考图重建的区域。请确认配准覆盖范围与对应关系后再核验。</p><label>对应关系与核验依据<textarea id="verify-note" rows="4" maxlength="2000" placeholder="例如：同一壁画 1963.252 的右上部，依据线稿与题记对应。"></textarea></label><div id="verify-error" class="error-text"></div><div class="modal-actions"><button class="button" data-action="close-verify">取消</button><button class="button primary" data-action="save-verify">确认核验</button></div></div></div>
+  <div id="damage-modal" class="modal hidden"><div class="modal-backdrop" data-action="close-damage-list"></div><div class="modal-card damage-modal-card"><div class="modal-head"><h2>缺损清单 <span id="damage-status" class="quiet-badge">待分析</span></h2><button class="icon-button" data-action="close-damage-list" aria-label="关闭">×</button></div><p>点击任一项，主图会框出对应区域；所有项都允许尝试修复，不再按风险分类拦截。没有掩膜的项会自动按框生成矩形掩膜。</p><div class="action-row"><button class="button primary" data-action="run-all-defects" disabled>运行全部</button><button class="button" data-action="add-manual-defect">手动添加缺损区域</button></div><div id="damage-list" class="damage-list"><div class="empty-inline">分析后逐项显示缺损，或手动添加</div></div><div id="damage-note" class="notice">所有缺损都可以尝试修复；结果不满意可以重跑。</div><div class="proposal-preview"><img id="damage-image" class="hidden"><div id="damage-empty" class="empty-inline">选中一项查看定位</div></div></div></div>
   <div id="toast" class="toast hidden"></div>
 </body>
 </html>

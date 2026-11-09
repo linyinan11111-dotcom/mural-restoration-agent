@@ -198,6 +198,14 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 .damage-item .button { min-height: 25px; padding: 0 7px; font-size: 9px; }
 .damage-workflow { margin: 12px 0; padding-top: 10px; border-top: 1px solid var(--line-soft); }
 .damage-workflow .proposal-preview { height: 135px; }
+.damage-workflow.compact { border-top: 0; padding-top: 4px; }
+.damage-workflow.compact .button { width: 100%; margin-top: 7px; }
+.damage-modal-card { width: min(700px, calc(100vw - 32px)); }
+.damage-modal-card .damage-list { max-height: 42vh; margin-top: 10px; }
+.damage-modal-card .proposal-preview { height: 230px; }
+.damage-highlight { position: absolute; z-index: 4; display: none; border: 2px solid #ff5a36; background: rgba(255, 90, 54, .18); box-shadow: 0 0 0 1px rgba(255, 255, 255, .65) inset; pointer-events: none; }
+.damage-highlight.visible { display: block; }
+.canvas-wrap.damage-drawing #mask-canvas { cursor: crosshair; }
 .manual-repair-settings { margin-top: 10px; border-top: 1px solid var(--line-soft); padding-top: 8px; }
 .manual-repair-settings summary { cursor: pointer; color: var(--muted); font-size: 11px; }
 .manual-repair-settings .run-button { margin-top: 6px; }
