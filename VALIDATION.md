@@ -8,7 +8,7 @@
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-最近一次完整运行：**70 passed, 1 warning**（约 19 秒，exit 0；60 项非 WebEngine + 10 项 WebEngine）。覆盖：
+最近一次完整运行：**76 passed, 5 warnings**（约 17 秒，exit 0；66 项非 WebEngine + 10 项 WebEngine）。覆盖：
 
 - 业务/API/规划器/存储/备份；
 - 风险分类与专业门禁（含两条门禁绕过回归：uncertain 掩膜、standard 工作流 enhanced）；
@@ -18,6 +18,8 @@
 - AI 尝试性补全门禁绕过（unrestorable 掩膜 + speculative + 显式实验开关可建任务）；
 - 真实扩散模型端到端一次尝试性缺陷修复：任务 `review`、候选标记 `speculative`、掩膜外 0 差异；
 - 三分屏对照 UI（原图/大面积/全图三栏）与全图 AI 生成通道：真实 SD 权重任务 `review`、候选 `speculative`、掩膜外 0 差异；
+- 云端全图重绘：完整原图（非空白掩膜）请求 Grok Imagine，任务 `review`、候选 `tool=imagine`、`speculative=true`、掩膜外 0 差异；
+- 云端配置、密钥脱敏、异常与 Key 不落盘/不进入返回值的单元测试；
 - 薄掩膜与厚掩膜合成（掩膜外 0 差异、薄掩膜完整预测）；
 - 发货 Qt WebEngine 外壳（页面加载、QWebChannel、掩膜往返、建任务→复核→导出、AI 分析按钮、滑动对齐）。
 
@@ -49,6 +51,7 @@ git diff --check
 - 视觉 API 需要用户自己的密钥与服务；没有记录真实付费调用。
 - 逐项/批量修复的完整桌面交互路径仍缺少端到端自动化覆盖（API、桥接层和主要 UI 状态已有回归）。
 - 缺损清单按用户要求不再按风险分类拦截，`uncertain` / `unrestorable` 也会尝试修复；出现坏结果需要人工重跑，这是产品选择而非缺陷。
+- 云端全图重绘依赖外部 API Key、网络与额度；本机测试通过本地代理 `127.0.0.1:12450` 访问 xAI，直接连接会超时。云端结果同样是推测，不是历史复原。
 - 比赛观察模式（观察包、human_gate、contest 门禁、演示脚本）已从代码与界面移除；本地 `data/demo_competition`、`data/human-gate` 旧目录未被引用，也未自动删除。
 - 本次未做交互式人工桌面点击验收（以离屏 WebEngine 外壳与 API/桥接回归代替）。
 - 本机 `dist/Shibi-1.0` 是 2026-10-31 的旧构建，包含已删除的旧 UI 代码，不能作为当前交付物；需要重新构建或删除。

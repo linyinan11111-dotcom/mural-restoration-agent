@@ -75,7 +75,7 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
         raise ValueError('掩膜不属于当前图像。')
     if planner == 'auto' and not (isinstance(auto, dict) and auto.get('steps')):
         raise ValueError('AI 自动任务缺少规划信息。')
-    if backend not in {'opencv', 'telea', 'ns', 'lama', 'reference', 'diffusion', 'denoise', 'color', 'deblur', 'research'} or planner not in {'api', 'rules', 'local', 'auto'} or not 1 <= count <= 3:
+    if backend not in {'opencv', 'telea', 'ns', 'lama', 'reference', 'diffusion', 'imagine', 'denoise', 'color', 'deblur', 'research'} or planner not in {'api', 'rules', 'local', 'auto'} or not 1 <= count <= 3:
         raise ValueError('不支持的修复配置。')
     if not available.get(backend):
         raise ValueError('所选工具尚未配置，请在模型与环境中查看安装状态。')
@@ -83,12 +83,14 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
         raise ValueError('不支持的修复模式。')
     if (backend == 'reference') != (mode == 'evidence'):
         raise ValueError('证据辅助模式必须使用核验参考重建工具。')
-    if mode == 'speculative' and backend != 'diffusion':
-        raise ValueError('推测模式必须使用扩散补全。')
+    if mode == 'speculative' and backend not in {'diffusion', 'imagine'}:
+        raise ValueError('推测模式必须使用扩散补全或云端全图重绘。')
     if backend == 'diffusion' and mode not in {'speculative', 'enhanced'}:
         raise ValueError('扩散补全仅允许在推测或加强修复模式下使用。')
-    if full_generation and (backend != 'diffusion' or mode != 'speculative'):
-        raise ValueError('全图 AI 生成必须使用 speculative + diffusion。')
+    if full_generation and (backend not in {'diffusion', 'imagine'} or mode != 'speculative'):
+        raise ValueError('全图 AI 生成必须使用 speculative + diffusion/imagine。')
+    if backend == 'imagine' and mode != 'speculative':
+        raise ValueError('云端全图重绘必须在 speculative 模式下执行。')
     if structure_control and (backend != 'diffusion' or not available['controlnet']):
         raise ValueError('结构控制需要已安装的 ControlNet 和扩散工具。')
     if registration_id:

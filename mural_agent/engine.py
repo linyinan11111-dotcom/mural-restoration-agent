@@ -124,6 +124,10 @@ class Engine:
         plan.evidence = [job['registration_id']] if job.get('registration_id') else []
         plan.budget = Budget(**job.get('budget', {'candidates': job['candidate_count']}))
         for step in plan.steps:
+            if step.tool == 'imagine':
+                step.prompt = job['instructions'] or step.prompt
+                step.full_generation = bool(job.get('full_generation'))
+                continue
             if step.tool == 'diffusion':
                 step.prompt = job['instructions'] or step.prompt
                 step.structure_control = job.get('structure_control', False)

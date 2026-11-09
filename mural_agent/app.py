@@ -29,7 +29,7 @@ from .planner import Budget
 class JobRequest(BaseModel):
     image_id: str
     mask_id: str
-    backend: Literal['opencv', 'telea', 'ns', 'lama', 'reference', 'diffusion', 'denoise', 'color', 'deblur', 'research'] = 'opencv'
+    backend: Literal['opencv', 'telea', 'ns', 'lama', 'reference', 'diffusion', 'imagine', 'denoise', 'color', 'deblur', 'research'] = 'opencv'
     planner: Literal['rules', 'api', 'local'] = 'rules'
     candidate_count: int = Field(default=2, ge=1, le=3)
     instructions: str = Field(default='', max_length=2000)

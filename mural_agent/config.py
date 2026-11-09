@@ -35,10 +35,19 @@ class Settings:
     worker_python: str = ''
     research_adapter: Path = ROOT / 'models/research-adapter.json'
     vision_model: Path = ROOT / 'models/qwen-vl'
+    imagine_provider: str = 'openai_json'
+    imagine_base_url: str = 'https://api.x.ai/v1'
+    imagine_model: str = 'grok-imagine-image-2.0'
+    imagine_api_key: str = ''
+    imagine_timeout: float = 180
 
     @property
     def api_ready(self) -> bool:
         return bool(self.api_key and self.api_model)
+
+    @property
+    def imagine_ready(self) -> bool:
+        return bool(self.imagine_api_key.strip() and self.imagine_base_url.strip() and self.imagine_model.strip())
 
     @classmethod
     def from_env(cls):
@@ -60,5 +69,10 @@ class Settings:
             worker_python=os.getenv('MURAL_WORKER_PYTHON', ''),
             research_adapter=Path(os.getenv('MURAL_RESEARCH_ADAPTER', str(ROOT / 'models/research-adapter.json'))),
             vision_model=Path(os.getenv('MURAL_VISION_MODEL', str(ROOT / 'models/qwen-vl'))),
+            imagine_provider=os.getenv('MURAL_IMAGINE_PROVIDER', 'openai_json'),
+            imagine_base_url=os.getenv('MURAL_IMAGINE_BASE_URL', 'https://api.x.ai/v1').rstrip('/'),
+            imagine_model=os.getenv('MURAL_IMAGINE_MODEL', 'grok-imagine-image-2.0'),
+            imagine_api_key=os.getenv('MURAL_IMAGINE_API_KEY', ''),
+            imagine_timeout=float(os.getenv('MURAL_IMAGINE_TIMEOUT', '180')),
         )
 

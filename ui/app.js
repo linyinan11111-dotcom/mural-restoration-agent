@@ -567,7 +567,8 @@
     const selected = state.candidate?.id || job.selected_id || candidates[0].id;
     if (!state.candidate) state.candidate = candidates.find(item => item.id === selected) || candidates[0];
     const methodNames = { lama: 'LaMa 纹理补全', telea: 'Telea 快速行进', ns: 'Navier–Stokes 边缘传播',
-      reference: '已核验壁画参考', diffusion: '扩散补全', denoise: '局部降噪', color: '局部色调匹配', deblur: '局部锐化', research: '研究模型' };
+      reference: '已核验壁画参考', diffusion: '扩散补全', imagine: 'Grok Imagine 全图重绘',
+      denoise: '局部降噪', color: '局部色调匹配', deblur: '局部锐化', research: '研究模型' };
     $('#candidate-strip').innerHTML = candidates.map((candidate, index) => `<button class="candidate-card ${candidate.id === state.candidate?.id ? 'active' : ''}" data-candidate="${candidate.id}"><img src="${fileUrl(candidate.file_url)}"><span>${index + 1}. ${escapeHtml(methodNames[candidate.tool] || candidate.tool)}</span></button>`).join('');
     $$('.candidate-card').forEach(item => item.addEventListener('click', () => {
       state.candidate = candidates.find(candidate => candidate.id === item.dataset.candidate); renderCandidates(job); renderComparison();
@@ -833,10 +834,19 @@
     update(state.triple.largeJobId, 'triple-large', 'triple-large-status');
     update(state.triple.fullJobId, 'triple-full', 'triple-full-status');
     const canDiffusion = Boolean(state.lastSnapshot?.models?.diffusion);
-    $$('[data-action="generate-large-panel"], [data-action="generate-full-panel"]').forEach(button => {
-      button.disabled = !canDiffusion || state.running || state.autoBusy;
-      button.title = canDiffusion ? '' : '需要安装扩散模型 models/sd-inpainting';
-    });
+    const canCloud = Boolean(state.lastSnapshot?.imagine?.configured);
+    const busy = state.running || state.autoBusy;
+    const largeButton = $('[data-action="generate-large-panel"]');
+    const fullButton = $('[data-action="generate-full-panel"]');
+    if (largeButton) {
+      largeButton.disabled = !canDiffusion || busy;
+      largeButton.title = canDiffusion ? '' : '需要安装扩散模型 models/sd-inpainting';
+    }
+    if (fullButton) {
+      fullButton.disabled = !(canDiffusion || canCloud) || busy;
+      fullButton.textContent = canCloud ? '生成全图（Grok）' : '生成全图';
+      fullButton.title = canCloud ? '使用完整原图调用 Grok Imagine 重绘' : '使用本地扩散全图生成';
+    }
   }
 
   function openTripleView() {
@@ -847,7 +857,12 @@
 
   async function generateTriple(kind) {
     if (!state.image) return toast('请先打开一幅壁画。');
-    if (!state.lastSnapshot?.models?.diffusion) return toast('需要已安装扩散模型（models/sd-inpainting）。');
+    if (kind === 'large' && !state.lastSnapshot?.models?.diffusion) {
+      return toast('大面积修补需要已安装本地扩散模型（models/sd-inpainting）。');
+    }
+    if (kind === 'full' && !state.lastSnapshot?.models?.diffusion && !state.lastSnapshot?.imagine?.configured) {
+      return toast('全图生成需要本地扩散模型或已配置 Grok Imagine。');
+    }
     if (state.running || state.autoBusy) return toast('当前有任务在运行，请稍候。');
     const button = $(`[data-action="generate-${kind}-panel"]`);
     if (button) button.disabled = true;
@@ -1243,12 +1258,16 @@
     $('#api-model').value = state.lastSnapshot?.api?.model || '';
     $('#api-key').value = '';
     $('#api-json').checked = state.lastSnapshot?.api?.json_mode !== false;
+    $('#imagine-base').value = state.lastSnapshot?.imagine?.base_url || 'https://api.x.ai/v1';
+    $('#imagine-model').value = state.lastSnapshot?.imagine?.model || 'grok-imagine-image-2.0';
+    $('#imagine-key').value = '';
     $('#api-error').textContent = '';
     showModal('settings-modal');
   }
 
   async function saveSettings() {
-    const form = { kind: $('#api-kind').value, base_url: $('#api-base').value.trim(), model: $('#api-model').value.trim(), key: $('#api-key').value, json_mode: $('#api-json').checked };
+    const form = { kind: $('#api-kind').value, base_url: $('#api-base').value.trim(), model: $('#api-model').value.trim(), key: $('#api-key').value, json_mode: $('#api-json').checked,
+      imagine: { provider: 'openai_json', base_url: $('#imagine-base').value.trim(), model: $('#imagine-model').value.trim(), key: $('#imagine-key').value } };
     try { await invoke('saveApiSettings', JSON.stringify(form)); hideModal('settings-modal'); toast('API 配置已保存。'); await refresh(); }
     catch (error) { $('#api-error').textContent = error.message; }
   }

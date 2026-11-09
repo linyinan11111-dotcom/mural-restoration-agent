@@ -10,7 +10,7 @@ from .config import Settings
 
 class Step(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    tool: Literal['telea', 'ns', 'lama', 'reference', 'diffusion', 'denoise', 'color', 'deblur', 'research']
+    tool: Literal['telea', 'ns', 'lama', 'reference', 'diffusion', 'imagine', 'denoise', 'color', 'deblur', 'research']
     radius: int = Field(default=3, ge=1, le=9)
     reason: str = Field(max_length=1000)
     seed: int = Field(default=42, ge=0, le=2147483647)
@@ -69,7 +69,7 @@ def rule_plan(backend, count, fraction):
     if backend in {'telea', 'ns'}:
         steps = [Step(tool=backend, radius=min(9, 3+i), reason='按缺损类别使用指定的传统局部修补算法。')
                  for i in range(count)]
-    elif backend in {'reference', 'diffusion', 'denoise', 'color', 'deblur', 'research'}:
+    elif backend in {'reference', 'diffusion', 'imagine', 'denoise', 'color', 'deblur', 'research'}:
         steps = [Step(tool=backend, seed=42+i, reason='按用户选择的独立工具生成候选。') for i in range(count)]
     elif backend == 'lama':
         steps = [Step(tool='lama', radius=3, reason='用上下文纹理补全选中区域。')]
