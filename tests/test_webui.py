@@ -88,7 +88,7 @@ def test_shipped_shell_loads_and_exposes_bridge(window, qt_app):
     assert snapshot['models']['lama'] is False
     assert snapshot['aux_version'] >= 0
     assert run_js(window, "document.title || ''") != ''
-    assert run_js(window, "Boolean(document.querySelector('#damage-list') && document.querySelector('#reference-modal') && document.querySelector('#verify-modal') && document.querySelector('#auto-button'))") is True
+    assert run_js(window, "Boolean(document.querySelector('#damage-list') && document.querySelector('#reference-modal') && document.querySelector('#verify-modal') && document.querySelector('#auto-button') && document.querySelector('#allow-generative-attempt') && document.querySelector('#damage-generative'))") is True
     # QtWebEngine has no default prompt implementation; the reference workflow must
     # not depend on window.prompt.
     assert 'window.prompt' not in (ROOT / 'ui' / 'app.js').read_text(encoding='utf-8')

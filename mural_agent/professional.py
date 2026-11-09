@@ -103,7 +103,8 @@ def validate_professional_create(mask_record, *, rationale, evidence_level, mode
                                  expert_notes='', mask_source=None, allow_enhanced=False,
                                  risk_acknowledged=False, mask_gate_confirmed=False,
                                  has_unrestorable=False, has_uncertain=False,
-                                 force_override=False, force_override_reason=''):
+                                 force_override=False, force_override_reason='',
+                                 allow_generative_attempt=False):
     """Gate before enqueueing a professional_step job.
 
     Risk flags are derived from the frozen mask record; the ``has_*``
@@ -124,6 +125,11 @@ def validate_professional_create(mask_record, *, rationale, evidence_level, mode
     if mask_record.get('expert_force_override') and not force_override:
         force_override = True
         force_override_reason = force_override_reason or mask_record.get('force_override_reason') or ''
+    if allow_generative_attempt:
+        if mode != 'speculative':
+            raise ValueError('AI 尝试性补全必须在 speculative 模式下执行。')
+        if not risk_acknowledged:
+            raise ValueError('AI 尝试性补全须勾选风险提示：结果是推测，不是历史原貌。')
     # Speculative is off by default: mode and level must both opt in with rationale.
     if mode == 'speculative' or level == 'speculative':
         if mode != 'speculative' or level != 'speculative':
@@ -138,14 +144,17 @@ def validate_professional_create(mask_record, *, rationale, evidence_level, mode
         if not risk_acknowledged:
             raise ValueError('专业分步：加强修复须勾选风险提示（文化边界 / 非历史定稿）已知悉。')
         require_rationale(rationale, label='加强修复依据')
-    if flags['has_unrestorable']:
-        raise ValueError('专业分步：存在不可复原（unrestorable）标红区，禁止任何像素修复；仅可导出标注图与报告。')
-    if flags['has_uncertain']:
-        if level != 'conservative':
-            raise ValueError('专业分步：不确定（uncertain）红区默认禁止加强/推测；仅可在强制放行后做保守修补。')
-        if not force_override:
-            raise ValueError('专业分步：不确定红区须勾选「专家强制放行」并填写理由，才可保守修补。')
-        require_rationale(force_override_reason, label='强制放行理由')
+    # The experimental generative path is an explicit expert override for large
+    # losses. It still records risk flags but does not pretend to be evidence.
+    if not allow_generative_attempt:
+        if flags['has_unrestorable']:
+            raise ValueError('专业分步：存在不可复原（unrestorable）标红区，禁止任何像素修复；仅可导出标注图与报告。')
+        if flags['has_uncertain']:
+            if level != 'conservative':
+                raise ValueError('专业分步：不确定（uncertain）红区默认禁止加强/推测；仅可在强制放行后做保守修补。')
+            if not force_override:
+                raise ValueError('专业分步：不确定红区须勾选「专家强制放行」并填写理由，才可保守修补。')
+            require_rationale(force_override_reason, label='强制放行理由')
     notes = (expert_notes or '').strip()[:2000]
     return {
         'rationale': rationale,
@@ -153,24 +162,33 @@ def validate_professional_create(mask_record, *, rationale, evidence_level, mode
         'expert_notes': notes,
         'mask_source': source,
         'allow_enhanced': bool(allow_enhanced) if level == 'enhanced' else False,
-        'risk_acknowledged': bool(risk_acknowledged) if level == 'enhanced' else False,
+        'risk_acknowledged': bool(risk_acknowledged) if (level == 'enhanced' or allow_generative_attempt) else False,
         'mask_gate_confirmed': True,
         'has_unrestorable': bool(flags['has_unrestorable']),
         'has_uncertain': bool(flags['has_uncertain']),
         'force_override': bool(force_override) if flags['has_uncertain'] else False,
         'force_override_reason': (force_override_reason or '').strip()[:2000] if flags['has_uncertain'] else '',
+        'allow_generative_attempt': bool(allow_generative_attempt),
     }
 
 
 def enforce_mode_and_risk(*, mode, mask_record, mask_gate_confirmed=False, allow_enhanced=False,
                           risk_acknowledged=False, force_override=False,
-                          force_override_reason=''):
+                          force_override_reason='', allow_generative_attempt=False):
     """Universal gates for both standard and professional_step workflows.
 
     These are enforced at job creation *and* again before execution, so a
     standard-workflow job cannot bypass enhanced/speculative/risk gates.
     """
     flags = derive_risk_flags(mask_record)
+    if allow_generative_attempt:
+        if mode != 'speculative':
+            raise ValueError('AI 尝试性补全必须在 speculative 模式下执行。')
+        if not mask_gate_confirmed:
+            raise ValueError('专业分步：请勾选「已核对掩膜与依据」后再进入下一档。')
+        if not risk_acknowledged:
+            raise ValueError('AI 尝试性补全须勾选风险提示：结果是推测，不是历史原貌。')
+        return flags
     if flags['has_unrestorable']:
         raise ValueError('专业分步：存在不可复原（unrestorable）标红区，禁止任何像素修复；仅可导出标注图与报告。')
     if flags['has_uncertain']:
@@ -209,6 +227,7 @@ def validate_job_record_for_execution(job, mask_record):
         risk_acknowledged=bool(job.get('risk_acknowledged')),
         force_override=bool(job.get('force_override')),
         force_override_reason=job.get('force_override_reason') or '',
+        allow_generative_attempt=bool(job.get('allow_generative_attempt')),
     )
     if normalize_workflow(job.get('workflow')) != WORKFLOW_PROFESSIONAL:
         return
@@ -224,6 +243,7 @@ def validate_job_record_for_execution(job, mask_record):
         mask_gate_confirmed=bool(job.get('mask_gate_confirmed', True)),
         force_override=bool(job.get('force_override')),
         force_override_reason=job.get('force_override_reason') or '',
+        allow_generative_attempt=bool(job.get('allow_generative_attempt')),
     )
 
 

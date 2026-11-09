@@ -7,6 +7,7 @@
 - 导入壁画图像，并用画笔或辅助分割工具选择待处理区域。
 - 使用本地视觉模型分析疑似缺损、类别、范围和可见文化线索；分析完成后以弹窗显示缺损清单，可反复打开。
 - 点击清单条目可在主图定位；支持手动拖框添加缺损区域；每条缺损可选择建议方法或单独指定 LaMa、Telea、Navier–Stokes、局部色调匹配，再逐项或全部运行。
+- 可选实验性 AI 尝试性补全：允许大面积缺损走扩散生成，或让缺损清单直接生成；结果强制按假设归档，不作为历史定稿。
 - 对照原图、修复候选和差异图，复核后保存图像或导出 ZIP 档案。
 - 保存历史任务，支持查看、续跑、参考资料配准和工作空间备份。
 
@@ -54,7 +55,7 @@ python -m venv .venv
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest -q            # 69 passed
+.\.venv\Scripts\python.exe -m pytest -q            # 70 passed
 .\.venv\Scripts\python.exe scripts/verify_desktop.py
 ```
 

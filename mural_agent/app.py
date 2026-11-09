@@ -49,6 +49,7 @@ class JobRequest(BaseModel):
     has_uncertain: bool = False
     force_override: bool = False
     force_override_reason: str = ''
+    allow_generative_attempt: bool = False
 
 
 class ReviewRequest(BaseModel):
@@ -186,6 +187,7 @@ def create_app(settings=None):
             has_uncertain=request.has_uncertain,
             force_override=request.force_override,
             force_override_reason=request.force_override_reason,
+            allow_generative_attempt=request.allow_generative_attempt,
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc

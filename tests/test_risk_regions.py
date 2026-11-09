@@ -182,6 +182,28 @@ def test_rejected_and_hypothesis_results_cannot_be_exported_as_pixels():
     assert allowed['selected_as'] == 'hypothesis'
 
 
+def test_generative_attempt_bypasses_risk_gate(workbench, monkeypatch):
+    client, app = workbench
+    image, mask_record, *_ = upload_case(client)
+    store, engine = app.state.store, app.state.engine
+    store.update('mask', mask_record['id'], region_class='unrestorable', user_confirmed=True)
+    availability = engine.tools.availability()
+    availability['diffusion'] = True
+    monkeypatch.setattr(engine.tools, 'availability', lambda: availability)
+    monkeypatch.setattr(engine, 'submit', lambda job_id: None)
+    response = client.post('/api/jobs', json={
+        'image_id': image['id'], 'mask_id': mask_record['id'], 'candidate_count': 1,
+        'backend': 'diffusion', 'planner': 'rules', 'mode': 'speculative',
+        'workflow': 'professional_step', 'rationale': '大面积缺失，用户要求 AI 尝试性生成，按假设归档。',
+        'evidence_level': 'speculative', 'mask_gate_confirmed': True,
+        'risk_acknowledged': True, 'allow_generative_attempt': True,
+    })
+    assert response.status_code == 202, response.text
+    job = store.get('job', response.json()['id'])
+    assert job['allow_generative_attempt'] is True
+    assert job['mode'] == 'speculative'
+
+
 def test_workspace_create_job_unit_block(workbench):
     client, app = workbench
     store, engine = app.state.store, app.state.engine

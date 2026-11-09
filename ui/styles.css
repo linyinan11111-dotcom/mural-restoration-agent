@@ -211,6 +211,8 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 .damage-modal-card .damage-method select { flex: 1 1 auto; min-width: 0; font-size: 11px; padding: 4px 7px; }
 .damage-modal-card .damage-item .button { font-size: 11px; min-height: 32px; }
 .damage-modal-card .damage-confirm { font-size: 11px; }
+.damage-generative-row { margin: 9px 0 0; padding: 7px 8px; border: 1px dashed #c48a2d; border-radius: 5px; background: #fff8ec; color: #6d5426; }
+.damage-modal-card .damage-generative-row { font-size: 11px; line-height: 1.5; }
 .damage-modal-card .notice { font-size: 11px; line-height: 1.55; }
 .damage-modal-card .proposal-preview { height: 230px; }
 .damage-highlight { position: absolute; z-index: 4; display: none; border: 2px solid #ff5a36; background: rgba(255, 90, 54, .18); box-shadow: 0 0 0 1px rgba(255, 255, 255, .65) inset; pointer-events: none; }

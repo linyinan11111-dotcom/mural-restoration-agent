@@ -82,8 +82,9 @@
     const note = $('#professional-note');
     if (note) note.style.opacity = on ? '1' : '.72';
     const mode = $('#repair-mode')?.value || 'conservative';
+    const generative = Boolean($('#allow-generative-attempt')?.checked);
     const riskAck = $('#risk-ack')?.closest('label');
-    if (riskAck) riskAck.style.display = on && mode === 'enhanced' ? '' : 'none';
+    if (riskAck) riskAck.style.display = on && (mode === 'enhanced' || generative) ? '' : 'none';
     const allowEnhanced = $('#allow-enhanced')?.closest('label');
     if (allowEnhanced) allowEnhanced.style.display = on && mode === 'enhanced' ? '' : 'none';
     const maskGate = $('#mask-gate-confirmed')?.closest('label');
@@ -384,23 +385,27 @@
     if (!state.image || !maskHasPixels()) return toast('请先圈选需要修复的区域。');
     if (state.autoBusy) return toast('AI 分析仍在运行，请完成后再启动修复。');
     if (state.running) return toast('已有任务在执行，请等待完成或取消。');
+    const generative = Boolean($('#allow-generative-attempt')?.checked);
+    if (generative && !state.lastSnapshot?.models?.diffusion) {
+      return toast('AI 尝试性补全需要已安装扩散模型（models/sd-inpainting）。');
+    }
     if (isProfessional()) {
       if (!$('#mask-gate-confirmed')?.checked) return toast('专业分步：请勾选「已核对掩膜与依据」后再进入下一档。');
       if ($('#evidence-level').value === 'observation') return toast('专业分步：observation 只可记录观察，不能执行修复。');
-      if (hasUnrestorableRegions()) return toast('存在不可复原红区：禁止任何像素修复，请只导出标注图与报告。');
-      if (hasUncertainRegions()) {
+      if (!generative && hasUnrestorableRegions()) return toast('存在不可复原红区：禁止任何像素修复，请只导出标注图与报告。');
+      if (!generative && hasUncertainRegions()) {
         if ($('#evidence-level').value !== 'conservative' || $('#repair-mode').value !== 'conservative') {
           return toast('不确定红区仅可在强制放行后做保守修补。');
         }
         if (!$('#force-override')?.checked) return toast('不确定红区须勾选「专家强制放行」并填写理由。');
         if (!($('#force-override-reason')?.value || '').trim()) return toast('请填写强制放行理由。');
       }
-      if ($('#repair-mode').value === 'speculative' || $('#evidence-level').value === 'speculative') {
+      if (!generative && ($('#repair-mode').value === 'speculative' || $('#evidence-level').value === 'speculative')) {
         if ($('#repair-mode').value !== 'speculative' || $('#evidence-level').value !== 'speculative') {
           return toast('专业分步：推测须同时将修复模式与证据等级设为 speculative。');
         }
       }
-      if ($('#repair-mode').value === 'enhanced' || $('#evidence-level').value === 'enhanced') {
+      if (!generative && ($('#repair-mode').value === 'enhanced' || $('#evidence-level').value === 'enhanced')) {
         if ($('#repair-mode').value !== 'enhanced' || $('#evidence-level').value !== 'enhanced') {
           return toast('专业分步：加强修复须同时将修复模式与证据等级设为 enhanced。');
         }
@@ -412,30 +417,34 @@
         }
       }
     }
+    if (generative && !$('#risk-ack')?.checked) {
+      return toast('AI 尝试性补全须勾选风险提示：结果是推测，不是历史原貌。');
+    }
     setBusy(true);
     try {
       const rationale = ($('#rationale')?.value || '').trim() ||
-        `依据：仅处理经人工确认的当前选区，掩膜外像素保持不变。${$('#repair-mode').value === 'speculative' ? ' 推测结果仅作假设性建议，需人工复核。' : ' AI 补全仅为待复核候选，不代表历史原貌。'}`;
+        `依据：仅处理经人工确认的当前选区，掩膜外像素保持不变。${generative ? ' AI 尝试性补全结果是推测，不是历史原貌，只能按假设归档。' : ($('#repair-mode').value === 'speculative' ? ' 推测结果仅作假设性建议，需人工复核。' : ' AI 补全仅为待复核候选，不代表历史原貌。')}`;
       const mask = await invoke('saveMask', state.image.id, exportMaskBase64(), JSON.stringify(state.proposalIds || []));
       const request = { image_id: state.image.id, mask_id: mask.id,
-        backend: $('#repair-backend').value, planner: $('#planner').value,
+        backend: generative ? 'diffusion' : $('#repair-backend').value, planner: $('#planner').value,
         candidate_count: Number($('#candidate-number').value), instructions: $('#instructions').value,
-        mode: $('#repair-mode').value, registration_id: state.registration?.id || null,
+        mode: generative ? 'speculative' : $('#repair-mode').value, registration_id: state.registration?.id || null,
         structure_control: $('#controlnet').checked,
         budget: { candidates: Number($('#candidate-number').value), revisions: Number($('#revisions').value), timeout_seconds: Number($('#timeout').value), max_api_calls: 1 },
         quality_thresholds: { boundary_pair_delta: 65 },
         workflow: currentWorkflow(),
         rationale,
-        evidence_level: $('#evidence-level')?.value || null,
+        evidence_level: generative ? 'speculative' : ($('#evidence-level')?.value || null),
         expert_notes: ($('#expert-notes')?.value || '').trim(),
         mask_source: (state.proposalIds || []).length ? 'ai_candidate' : 'manual',
         allow_enhanced: Boolean($('#allow-enhanced')?.checked),
-        risk_acknowledged: Boolean($('#risk-ack')?.checked),
+        risk_acknowledged: generative ? true : Boolean($('#risk-ack')?.checked),
         mask_gate_confirmed: Boolean($('#mask-gate-confirmed')?.checked),
         has_unrestorable: hasUnrestorableRegions(),
         has_uncertain: hasUncertainRegions(),
         force_override: Boolean($('#force-override')?.checked),
-        force_override_reason: ($('#force-override-reason')?.value || '').trim() };
+        force_override_reason: ($('#force-override-reason')?.value || '').trim(),
+        allow_generative_attempt: generative };
       state.job = await invoke('createJob', JSON.stringify(request));
       state.candidate = null; state.maskDirty = false;
       $('#candidate-strip').innerHTML = '<div class="empty-inline">修复候选会显示在这里</div>';
@@ -478,6 +487,13 @@
   }
 
   function renderModels(models) {
+    ['allow-generative-attempt', 'damage-generative'].forEach(id => {
+      const node = $('#' + id);
+      if (node) {
+        node.disabled = !models.diffusion;
+        node.closest('label')?.classList.toggle('disabled', !models.diffusion);
+      }
+    });
     const labels = [['LaMa', models.lama], ['SAM 2', models.sam2], ['Qwen-VL', models.vision], ['SD', models.diffusion]];
     $('#model-list').innerHTML = labels.map(([name, available]) => `<span class="model-tag ${available ? '' : 'off'}">${name}</span>`).join('');
     const ready = models.lama ? 'LaMa 可用' : '传统修补可用';
@@ -496,6 +512,7 @@
 
   function renderJob(job) {
     if (!job) return;
+    if (job.mode === 'speculative') $('#archive-hypothesis').checked = true;
     const running = ACTIVE.includes(job.status);
     $('#job-status').textContent = ({ queued: '排队中', planning: '规划中', running: '修复中', evaluating: '质量检查', review: '等待复核', interrupted: '已中断', failed: '执行失败', cancelled: '已取消' })[job.status] || job.status;
     $('#job-progress').style.width = `${Math.max(0, Math.min(100, job.progress || 0))}%`;
@@ -807,6 +824,7 @@
     }
     const jobs = state.lastSnapshot?.jobs || [];
     const busy = state.running || state.autoBusy;
+    const generative = Boolean($('#damage-generative')?.checked);
     list.innerHTML = state.damageItems.map((item, index) => {
       const [x0, y0, x1, y1] = item.bbox || [0, 0, 0, 0];
       const extent = Math.max(0, (x1 - x0) * (y1 - y0)) / 100;
@@ -823,7 +841,7 @@
       return `<div class="damage-item ${item === state.selectedDamage ? 'selected' : ''}" data-damage-row="${index}">` +
         `<div class="damage-item-main"><button class="damage-select" data-damage="${index}">${String(index + 1).padStart(2, '0')} ${escapeHtml(DAMAGE_LABELS[item.type] || '其他疑似缺损')}</button>` +
         `<small>${escapeHtml(item.size || 'manual')} · 框选约 ${extent.toFixed(2)}% · 置信 ${Math.round((item.confidence || 0) * 100)}%</small>` +
-        `<small>建议：${escapeHtml(method)}</small><label class="damage-method">修补方案 <select data-method-defect="${index}" ${disabled ? 'disabled' : ''}>` +
+        `<small>建议：${escapeHtml(method)}</small><label class="damage-method">修补方案 <select data-method-defect="${index}" ${disabled || generative ? 'disabled' : ''}>` +
         `<option value="recommended" ${selectedMethod === 'recommended' ? 'selected' : ''}>采用建议</option>` +
         `<option value="lama" ${selectedMethod === 'lama' ? 'selected' : ''} ${state.lastSnapshot?.models?.lama ? '' : 'disabled'}>LaMa AI 纹理补全${state.lastSnapshot?.models?.lama ? '' : '（未安装，将回退 Telea）'}</option>` +
         `<option value="telea" ${selectedMethod === 'telea' ? 'selected' : ''}>Telea 局部纹理传播</option>` +
@@ -842,8 +860,12 @@
       state.damageItems[Number(select.dataset.methodDefect)].selectedMethod = select.value;
     }));
     $$('[data-run-defect]').forEach(button => button.addEventListener('click', () => runDefectRepairs([Number(button.dataset.runDefect)]).catch(notifyError)));
+    const generativeToggle = $('#damage-generative');
+    if (generativeToggle) generativeToggle.onchange = () => renderDamage(limitations);
     const first = state.damageItems[0];
-    $('#damage-note').textContent = `${limitations || ''} 首项建议：${damageRecommendation(first)}。所有项都可以尝试修复，结果不满意可重跑。`;
+    $('#damage-note').textContent = generative
+      ? 'AI 生成式补全（实验）：每项会用扩散模型按框直接生成，结果是推测，只能按假设归档；可能修坏，可重跑。'
+      : `${limitations || ''} 首项建议：${damageRecommendation(first)}。所有项都可以尝试修复，结果不满意可重跑。`;
     if (runAll) {
       runAll.disabled = busy || !state.damageItems.some(item => !jobs.some(job => job.defect_proposal_id === item.proposal_id && ACTIVE.includes(job.status)));
     }
@@ -852,6 +874,10 @@
   async function runDefectRepairs(indexes) {
     if (!state.image) return toast('请先打开一幅壁画。');
     if (state.running || state.autoBusy) return toast('请等待当前分析或修复任务完成。');
+    const generativeAttempt = Boolean($('#damage-generative')?.checked);
+    if (generativeAttempt && !state.lastSnapshot?.models?.diffusion) {
+      return toast('AI 生成式补全需要已安装扩散模型（models/sd-inpainting）。');
+    }
     const selected = indexes.map(index => state.damageItems[index]).filter(Boolean);
     if (!selected.length) return toast('没有可运行的缺损项。');
     const proposalIds = [];
@@ -882,6 +908,7 @@
     if (failed.length) toast(`${failed.length} 项无法自动生成掩膜，已跳过；其余继续运行。`);
     const result = await invoke('runDefectRepairs', JSON.stringify({
       image_id: state.image.id, proposal_ids: proposalIds, confirmed: true, methods,
+      generative_attempt: generativeAttempt,
     }));
     const count = result.jobs?.length || 0;
     if (!count) {
@@ -1183,6 +1210,15 @@
   $('#repair-mode')?.addEventListener('change', syncProfessionalUi);
   $('#evidence-level')?.addEventListener('change', syncProfessionalUi);
   $('#force-override')?.addEventListener('change', syncProfessionalUi);
+  $('#allow-generative-attempt')?.addEventListener('change', event => {
+    if (event.target.checked) {
+      $('#repair-mode').value = 'speculative';
+      $('#evidence-level').value = 'speculative';
+      $('#risk-ack').checked = true;
+      toast('已启用 AI 尝试性补全：将用扩散模型生成，结果须按假设归档。');
+    }
+    syncProfessionalUi();
+  });
   syncProfessionalUi();
   $('#professional-step').checked = true;
   $('#planner').addEventListener('change', event => {

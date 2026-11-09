@@ -269,7 +269,8 @@ class Bridge(QObject):
                 has_unrestorable=bool(request.get('has_unrestorable')),
                 has_uncertain=bool(request.get('has_uncertain')),
                 force_override=bool(request.get('force_override')),
-                force_override_reason=request.get('force_override_reason') or '')
+                force_override_reason=request.get('force_override_reason') or '',
+                allow_generative_attempt=bool(request.get('allow_generative_attempt')))
             return self._job(job)
         return self._result(action)
 
@@ -516,7 +517,8 @@ class Bridge(QObject):
             from .defect_jobs import run_confirmed_defects
             result = run_confirmed_defects(
                 self.store, self.engine, request.get('image_id'),
-                request.get('proposal_ids'), request.get('methods'))
+                request.get('proposal_ids'), request.get('methods'),
+                generative_attempt=bool(request.get('generative_attempt')))
             result['jobs'] = [self._job(job) for job in result['jobs']]
             return result
         return self._result(action)

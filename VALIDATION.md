@@ -8,13 +8,15 @@
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-最近一次完整运行：**69 passed, 1 warning**（约 20 秒，exit 0；59 项非 WebEngine + 10 项 WebEngine）。覆盖：
+最近一次完整运行：**70 passed, 1 warning**（约 19 秒，exit 0；60 项非 WebEngine + 10 项 WebEngine）。覆盖：
 
 - 业务/API/规划器/存储/备份；
 - 风险分类与专业门禁（含两条门禁绕过回归：uncertain 掩膜、standard 工作流 enhanced）；
 - 复核决定约束导出（驳回 / 假设性结果）；
 - 缺损清单不按风险分类拦截（uncertain/unrestorable 仍可建任务）；
 - 缺损清单弹窗、手动添加缺损、点击条目主图定位；
+- AI 尝试性补全门禁绕过（unrestorable 掩膜 + speculative + 显式实验开关可建任务）；
+- 真实扩散模型端到端一次尝试性缺陷修复：任务 `review`、候选标记 `speculative`、掩膜外 0 差异；
 - 薄掩膜与厚掩膜合成（掩膜外 0 差异、薄掩膜完整预测）；
 - 发货 Qt WebEngine 外壳（页面加载、QWebChannel、掩膜往返、建任务→复核→导出、AI 分析按钮、滑动对齐）。
 

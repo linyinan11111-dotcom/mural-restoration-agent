@@ -56,7 +56,8 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
                quality_thresholds=None, auto=None, workflow='standard', rationale='',
                evidence_level=None, expert_notes='', mask_source=None, allow_enhanced=False,
                risk_acknowledged=False, mask_gate_confirmed=False, has_unrestorable=False,
-               has_uncertain=False, force_override=False, force_override_reason=''):
+               has_uncertain=False, force_override=False, force_override_reason='',
+               allow_generative_attempt=False):
     from .planner import Budget
     from .imaging import mask_array
     from .professional import (WORKFLOW_PROFESSIONAL, normalize_workflow, normalize_mask_source,
@@ -114,6 +115,7 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
         risk_acknowledged=bool(risk_acknowledged),
         force_override=bool(force_override),
         force_override_reason=force_override_reason,
+        allow_generative_attempt=bool(allow_generative_attempt),
     )
     professional_meta = {}
     if workflow == WORKFLOW_PROFESSIONAL:
@@ -130,6 +132,7 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
             mask_gate_confirmed=mask_gate_confirmed,
             force_override=force_override,
             force_override_reason=force_override_reason,
+            allow_generative_attempt=bool(allow_generative_attempt),
         )
     elif evidence_level:
         # Allow optional provenance fields on standard jobs without full gates.
@@ -172,6 +175,7 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
            'has_uncertain': bool(risk_flags['has_uncertain']),
            'force_override': bool(force_override) if risk_flags['has_uncertain'] else False,
            'force_override_reason': (force_override_reason or '')[:2000] if risk_flags['has_uncertain'] else '',
+           'allow_generative_attempt': bool(allow_generative_attempt),
            'selected_as': None}
     store.put('job', job)
     engine.submit(identifier)
