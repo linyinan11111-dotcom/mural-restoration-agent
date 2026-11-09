@@ -74,9 +74,10 @@ def run_confirmed_defects(store, engine, image_id, proposal_ids, selected_method
             store, image, (store.folder(proposal_id) / 'mask.png').read_bytes(),
             [proposal_id], mask_source=proposal.get('mask_source') or 'ai_candidate',
             user_confirmed=True, region_class='fillable_lacuna', risk_regions=[])
+        from .professional import LARGE_GENERATION_PROMPT
         job = workspace.create_job(
             store, engine, image, mask, backend, 'rules', 1,
-            rationale + ' ' + str(metadata.get('evidence') or ''),
+            LARGE_GENERATION_PROMPT if generative_attempt else rationale + ' ' + str(metadata.get('evidence') or ''),
             mode='speculative' if generative_attempt else 'conservative',
             budget={'candidates': 1, 'revisions': 0, 'timeout_seconds': 300},
             workflow='professional_step', rationale=rationale,

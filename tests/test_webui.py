@@ -319,6 +319,10 @@ def test_damage_modal_and_manual_defect(window, qt_app):
     assert wait_until(qt_app, lambda: run_js(window, "!document.querySelector('#triple-modal').classList.contains('hidden')") is True, 10)
     assert run_js(window, "document.querySelectorAll('.triple-panel').length") == 3
     assert wait_until(qt_app, lambda: run_js(window, "document.querySelector('#triple-original').naturalWidth > 0") is True, 10)
+    # The isolated fixture has no diffusion weights; generation buttons must be
+    # disabled instead of failing only after a click.
+    assert run_js(window, "document.querySelector('[data-action=\"generate-large-panel\"]').disabled") is True
+    assert run_js(window, "document.querySelector('[data-action=\"generate-full-panel\"]').disabled") is True
     assert run_js(window, "document.querySelector('[data-action=\"close-triple-view\"]').click(); true") is True
 
 

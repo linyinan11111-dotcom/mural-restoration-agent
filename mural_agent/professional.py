@@ -64,6 +64,14 @@ ENHANCED_DIFFUSION_PROMPT = (
     'preserve the original composition and all visible paint, lines, cracks, and patina, '
     'subtle weathered surface, no new figures, symbols, or decorative motifs'
 )
+FULL_GENERATION_PROMPT = (
+    'aged mural painting, full image reconstruction guided by the original composition, '
+    'muted mineral pigments, plaster and pigment texture, no modern objects, no text, no watermark'
+)
+LARGE_GENERATION_PROMPT = (
+    'aged mural painting, conservative reconstruction of missing plaster and pigment, '
+    'muted mineral pigments matching the surrounding surface, no modern objects, no text, no watermark'
+)
 ENHANCED_NEGATIVE_PROMPT = (
     'white blank patch, flat solid fill, erased linework, clean new paint, modern objects, '
     'text, watermark, neon colors, photorealistic face, invented patterns, sharp CGI, oversaturated'

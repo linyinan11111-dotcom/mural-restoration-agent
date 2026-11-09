@@ -832,8 +832,10 @@
     };
     update(state.triple.largeJobId, 'triple-large', 'triple-large-status');
     update(state.triple.fullJobId, 'triple-full', 'triple-full-status');
+    const canDiffusion = Boolean(state.lastSnapshot?.models?.diffusion);
     $$('[data-action="generate-large-panel"], [data-action="generate-full-panel"]').forEach(button => {
-      button.disabled = state.running || state.autoBusy;
+      button.disabled = !canDiffusion || state.running || state.autoBusy;
+      button.title = canDiffusion ? '' : '需要安装扩散模型 models/sd-inpainting';
     });
   }
 
@@ -845,6 +847,7 @@
 
   async function generateTriple(kind) {
     if (!state.image) return toast('请先打开一幅壁画。');
+    if (!state.lastSnapshot?.models?.diffusion) return toast('需要已安装扩散模型（models/sd-inpainting）。');
     if (state.running || state.autoBusy) return toast('当前有任务在运行，请稍候。');
     const button = $(`[data-action="generate-${kind}-panel"]`);
     if (button) button.disabled = true;

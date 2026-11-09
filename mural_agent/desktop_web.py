@@ -204,9 +204,10 @@ class Bridge(QObject):
             mask_record = workspace.add_mask(
                 self.store, image, buffer.getvalue(), mask_source='manual',
                 user_confirmed=True, region_class='fillable_lacuna')
+            from .professional import FULL_GENERATION_PROMPT
             job = workspace.create_job(
                 self.store, self.engine, image, mask_record, 'diffusion', 'rules', 1,
-                '全图 AI 生成：以原图结构为引导，重新生成完整画面；结果仅为假设性示意。',
+                FULL_GENERATION_PROMPT,
                 mode='speculative', workflow='professional_step',
                 rationale='用户要求按原图进行全图 AI 生成；结果不是历史原貌，仅作方案示意。',
                 evidence_level='speculative', mask_gate_confirmed=True,
@@ -249,9 +250,10 @@ class Bridge(QObject):
             mask_record = workspace.add_mask(
                 self.store, image, buffer.getvalue(), proposal_ids=[],
                 mask_source='manual', user_confirmed=True, region_class='fillable_lacuna')
+            from .professional import LARGE_GENERATION_PROMPT
             job = workspace.create_job(
                 self.store, self.engine, image, mask_record, 'diffusion', 'rules', 1,
-                'AI 大面积修补：对当前所有缺损候选的并集做扩散生成；结果为假设性示意。',
+                LARGE_GENERATION_PROMPT,
                 mode='speculative', workflow='professional_step',
                 rationale='用户要求 AI 修补大面积缺损；并集区域为推测性生成，不是历史复原。',
                 evidence_level='speculative', mask_gate_confirmed=True,
