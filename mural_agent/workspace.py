@@ -86,11 +86,11 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
     if (backend == 'reference') != (mode == 'evidence'):
         raise ValueError('证据辅助模式必须使用核验参考重建工具。')
     if mode == 'speculative' and backend != 'diffusion':
-        raise ValueError('推测模式必须使用扩散补全。')
+        raise ValueError('推测模式必须使用云端生图。')
     if backend == 'diffusion' and mode not in {'speculative', 'enhanced'}:
-        raise ValueError('扩散补全仅允许在推测或加强修复模式下使用。')
+        raise ValueError('云端生图仅允许在推测或加强修复模式下使用。')
     if structure_control and (backend != 'diffusion' or not available['controlnet']):
-        raise ValueError('结构控制需要已安装的 ControlNet 和扩散工具。')
+        raise ValueError('结构控制需要已安装的 ControlNet；云端生图不使用本机 ControlNet。')
     if registration_id:
         registration = store.get('registration', registration_id)
         if not registration or registration['image_id'] != image_record['id'] or not registration.get('approved'):

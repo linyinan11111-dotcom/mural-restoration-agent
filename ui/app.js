@@ -669,14 +669,14 @@
   }
 
   function renderModels(models) {
-    const labels = [['LaMa', models.lama], ['SAM 2', models.sam2], ['Qwen-VL', models.vision], ['SD', models.diffusion]];
+    const labels = [['LaMa', models.lama], ['SAM 2', models.sam2], ['Qwen-VL', models.vision], ['云端生图', models.diffusion]];
     $('#model-list').innerHTML = labels.map(([name, available]) => `<span class="model-tag ${available ? '' : 'off'}">${name}</span>`).join('');
     const ready = models.lama ? 'LaMa 可用' : '传统修补可用';
     $('#engine-status').innerHTML = `<i></i>${ready}`;
     const backend = $('#repair-backend'); const prior = backend.value;
     const items = [['opencv', '传统修补 · Telea / NS', true], ['lama', 'LaMa · 纹理补全', models.lama],
       ['telea', 'Telea · 细裂缝', true], ['ns', 'Navier–Stokes · 细裂缝', true],
-      ['reference', '参考证据重建', models.reference], ['diffusion', '扩散推测补全', models.diffusion],
+      ['reference', '参考证据重建', models.reference], ['diffusion', '云端生图', models.diffusion],
       ['denoise', '局部降噪', true], ['color', '周边色调匹配', true], ['deblur', '局部锐化', true],
       ['research', '壁画研究模型', models.research]];
     backend.innerHTML = items.filter(([, , available]) => available).map(([value, title]) => `<option value="${value}">${title}</option>`).join('');
@@ -738,7 +738,7 @@
     const selected = state.candidate?.id || job.selected_id || candidates[0].id;
     if (!state.candidate) state.candidate = candidates.find(item => item.id === selected) || candidates[0];
     const methodNames = { lama: 'LaMa 纹理补全', telea: 'Telea 快速行进', ns: 'Navier–Stokes 边缘传播',
-      reference: '已核验壁画参考', diffusion: '扩散补全', denoise: '局部降噪', color: '局部色调匹配', deblur: '局部锐化', research: '研究模型' };
+      reference: '已核验壁画参考', diffusion: '云端生图', denoise: '局部降噪', color: '局部色调匹配', deblur: '局部锐化', research: '研究模型' };
     $('#candidate-strip').innerHTML = candidates.map((candidate, index) => `<button class="candidate-card ${candidate.id === state.candidate?.id ? 'active' : ''}" data-candidate="${candidate.id}"><img src="${fileUrl(candidate.file_url)}"><span>${index + 1}. ${escapeHtml(methodNames[candidate.tool] || candidate.tool)}</span></button>`).join('');
     $$('.candidate-card').forEach(item => item.addEventListener('click', () => {
       state.candidate = candidates.find(candidate => candidate.id === item.dataset.candidate); renderCandidates(job); renderComparison();
@@ -1295,18 +1295,38 @@
     } catch (error) { notifyError(error); }
   }
 
+  const IMAGINE_DEFAULTS = {
+    openai_json: { base: 'https://api.x.ai/v1', model: 'grok-imagine-image-2.0' },
+    openai_multipart: { base: 'https://api.openai.com/v1', model: 'gpt-image-1' },
+  };
+  function applyImagineDefaults(force) {
+    const provider = $('#imagine-provider')?.value || 'openai_json';
+    const defaults = IMAGINE_DEFAULTS[provider] || IMAGINE_DEFAULTS.openai_json;
+    const base = $('#imagine-base');
+    const model = $('#imagine-model');
+    const known = Object.values(IMAGINE_DEFAULTS);
+    if (base && (force || !base.value.trim() || known.some(item => item.base === base.value.trim()))) base.value = defaults.base;
+    if (model && (force || !model.value.trim() || known.some(item => item.model === model.value.trim()))) model.value = defaults.model;
+  }
   function openSettings() {
     $('#api-kind').value = state.lastSnapshot?.api?.kind || 'responses';
     $('#api-base').value = state.lastSnapshot?.api?.base_url || 'https://api.openai.com/v1';
     $('#api-model').value = state.lastSnapshot?.api?.model || '';
     $('#api-key').value = '';
     $('#api-json').checked = state.lastSnapshot?.api?.json_mode !== false;
+    const imagine = state.lastSnapshot?.imagine || {};
+    if ($('#imagine-provider')) $('#imagine-provider').value = imagine.provider || 'openai_json';
+    if ($('#imagine-base')) $('#imagine-base').value = imagine.base_url || IMAGINE_DEFAULTS.openai_json.base;
+    if ($('#imagine-model')) $('#imagine-model').value = imagine.model || IMAGINE_DEFAULTS.openai_json.model;
+    if ($('#imagine-key')) $('#imagine-key').value = '';
     $('#api-error').textContent = '';
     showModal('settings-modal');
   }
 
   async function saveSettings() {
-    const form = { kind: $('#api-kind').value, base_url: $('#api-base').value.trim(), model: $('#api-model').value.trim(), key: $('#api-key').value, json_mode: $('#api-json').checked };
+    const form = { kind: $('#api-kind').value, base_url: $('#api-base').value.trim(), model: $('#api-model').value.trim(), key: $('#api-key').value, json_mode: $('#api-json').checked,
+      imagine: { provider: $('#imagine-provider')?.value || 'openai_json', base_url: $('#imagine-base')?.value.trim() || '',
+        model: $('#imagine-model')?.value.trim() || '', key: $('#imagine-key')?.value || '' } };
     try { await invoke('saveApiSettings', JSON.stringify(form)); hideModal('settings-modal'); toast('API 配置已保存。'); await refresh(); }
     catch (error) { $('#api-error').textContent = error.message; }
   }
@@ -1344,6 +1364,7 @@
   $('#force-override')?.addEventListener('change', syncProfessionalUi);
   syncProfessionalUi();
   $('#professional-step').checked = true;
+  $('#imagine-provider')?.addEventListener('change', () => applyImagineDefaults(false));
   $('#planner').addEventListener('change', event => {
     $('#planner-note').textContent = event.target.value === 'api' ? '会向已配置服务发送图像缩略图、掩膜预览和备注。' : event.target.value === 'local' ? '本地 Qwen3-VL 分析图像，不发送数据。' : '本地规则不会发送图像。';
   });

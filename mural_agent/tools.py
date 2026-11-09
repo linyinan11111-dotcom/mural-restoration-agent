@@ -1,6 +1,4 @@
 """Whitelisted tools with versioned requests, isolated optional GPU worker."""
-from pathlib import Path
-import importlib.util
 import json
 import subprocess
 import sys
@@ -20,7 +18,7 @@ class ToolRegistry:
     def availability(self):
         s = self.engine.settings
         return {'opencv': True, 'telea': True, 'ns': True, 'lama': self.engine.lama.available(), 'reference': True,
-                'diffusion': (s.diffusion_model / 'model_index.json').exists() and importlib.util.find_spec('diffusers') is not None,
+                'diffusion': s.imagine_ready,
                 'denoise': True, 'color': True, 'deblur': True,
                 'research': s.research_adapter.exists(), 'sam2': self.engine.sam.available(),
                 'controlnet': (s.controlnet_model / 'config.json').exists()}
@@ -59,8 +57,17 @@ class ToolRegistry:
                 blur = cv2.GaussianBlur(original, (0, 0), 1.2)
                 output = cv2.addWeighted(original, 1.5, blur, -.5, 0)
             return output, {'device': 'cpu', 'opencv': cv2.__version__, 'method': {'color': 'local_tone_match', 'deblur': 'unsharp_mask', 'denoise': 'nlmeans'}[step.tool]}
-        if step.tool == 'diffusion' and job.get('mode') not in {'speculative', 'enhanced'}:
-            raise ValueError('扩散生成仅允许在推测性补全或加强修复模式执行。')
+        if step.tool == 'diffusion':
+            if job.get('mode') not in {'speculative', 'enhanced'}:
+                raise ValueError('云端生图仅允许在推测性补全或加强修复模式执行。')
+            from .imagine import ImagineClient, ImagineConfig
+            config = ImagineConfig.from_settings(s)
+            prompt = step.prompt or job.get('instructions') or ''
+            generated, meta = ImagineClient(config).edit(original, mask, prompt)
+            if job.get('structure_control'):
+                meta['structure_control'] = False
+                meta['structure_note'] = '云端生图不使用本机 ControlNet。'
+            return generated, meta
         # Release resident models before launching a separate interpreter on a 12GB GPU.
         engine.lama.unload()
         engine.sam.unload()

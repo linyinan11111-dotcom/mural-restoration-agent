@@ -98,6 +98,8 @@ class Bridge(QObject):
             'api_configured': self.settings.api_ready}, 'aux': self.aux, 'aux_version': self.aux_version,
             'api': {'kind': self.settings.api_kind, 'base_url': self.settings.api_base_url,
                     'model': self.settings.api_model, 'json_mode': self.settings.api_json_mode},
+            'imagine': {'provider': self.settings.imagine_provider, 'base_url': self.settings.imagine_base_url,
+                        'model': self.settings.imagine_model, 'configured': self.settings.imagine_ready},
             'registration': self._registration(self.store.get('registration', self.aux.get('registration_id', '')))
                 if self.aux.get('registration_id') else None}
 
@@ -818,6 +820,10 @@ class Bridge(QObject):
             fields = {'MURAL_API_KIND': kind, 'MURAL_API_BASE_URL': base,
                       'MURAL_API_MODEL': model, 'MURAL_API_JSON_MODE': str(json_mode).lower()}
             if key: fields['MURAL_API_KEY'] = key
+            imagine = values.get('imagine')
+            if isinstance(imagine, dict):
+                from .imagine import imagine_env_updates
+                fields.update(imagine_env_updates(imagine))
             if any('\n' in value or '\r' in value for value in fields.values()):
                 raise ValueError('配置不能包含换行。')
             env_path = ROOT / '.env'
@@ -828,6 +834,12 @@ class Bridge(QObject):
             self.settings.api_kind, self.settings.api_base_url = kind, base
             self.settings.api_model, self.settings.api_json_mode = model, json_mode
             if key: self.settings.api_key = key
+            if isinstance(imagine, dict):
+                self.settings.imagine_provider = fields['MURAL_IMAGINE_PROVIDER']
+                self.settings.imagine_base_url = fields['MURAL_IMAGINE_BASE_URL']
+                self.settings.imagine_model = fields['MURAL_IMAGINE_MODEL']
+                if fields.get('MURAL_IMAGINE_API_KEY'):
+                    self.settings.imagine_api_key = fields['MURAL_IMAGINE_API_KEY']
             return {'saved': True}
         return self._result(action)
 
