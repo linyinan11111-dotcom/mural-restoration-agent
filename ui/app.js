@@ -5,7 +5,7 @@
   const state = { bridge: null, image: null, job: null, candidate: null, keepEmpty: false, maskStrokes: [], regionStrokes: [], strokeOrder: [], currentStroke: null,
     baseMask: null, maskDirty: false, tool: 'brush', brushSize: 28, zoom: 1, promptPoints: [], promptLabels: [], promptBox: null,
     proposal: null, references: [], selectedReference: null, registration: null, lastSnapshot: null, toastTimer: null,
-    auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false, observe: null, gateReview: null };
+    auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false };
   const canvas = $('#mask-canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const regionCanvas = $('#region-canvas');
@@ -35,7 +35,7 @@
     state.running = value;
     document.body.classList.toggle('busy', value);
     $('[data-action="run-repair"]').disabled = value || !state.image || !maskHasPixels();
-    $$('[data-action="open-image"], [data-action="load-demo"], [data-action="load-competition-demo"]').forEach(button => { button.disabled = value; });
+    $$('[data-action="open-image"], [data-action="load-demo"]').forEach(button => { button.disabled = value; });
     $$('.history-item').forEach(item => { item.disabled = value; });
   };
   const maskHasPixels = () => {
@@ -47,22 +47,6 @@
   const notifyError = (error) => toast(error?.message || String(error));
   const AUTO_HINT = '由本地 Qwen 自动识别缺损、生成掩膜并规划保守修复；结果仍需人工复核。';
   const AUTO_HINT_PRO = 'AI 会列出疑似缺损。核对选区、选择修补方案，再逐项或批量运行。';
-  const DEMO_COPY = {
-    footer: '辅助观察与方案讨论，不替代专业判断；本流程不含图像生成修复。',
-    A: {
-      step: 'AI 仅做病害/露底观察标注与文献摘录，不生成、不补绘壁画图像。',
-      risk: '红区禁绘；AI 标注非病害鉴定结论。',
-      gate: '人工确认标注与出处后，仅可导出标注层、复核记录与说明文；禁止导出修复成图。',
-      export: '仅标注层 + 复核记录 + 说明，不含修复成图。',
-    },
-    B: {
-      step: '不确定区标红 + 拒答停绘 + 人工写处置建议；不输出补绘成图。',
-      risk: '任何补纹样、凭空出画面的请求一律拒答；不确定区只标红，不填色成图。',
-      refuse: '依据不足 / 涉及补绘生成 → 已拒答，仅保留原状记录。',
-      gate: '须人工选择：采纳 / 修改 / 驳回；未选择不得进入下一档或导出终稿。',
-      export: '仅标注层 + 复核记录 + 说明，不含修复成图。',
-    },
-  };
   const isProfessional = () => Boolean($('#professional-step')?.checked);
   const currentWorkflow = () => (isProfessional() ? 'professional_step' : 'standard');
   const isRegionTool = (tool) => tool === 'uncertain' || tool === 'uncertainty' || tool === 'unrestorable';
@@ -86,70 +70,6 @@
     return node ? node.value : '';
   };
 
-  const isObserveMode = () => Boolean(state.observe);
-  const gateExport = () => (state.gateReview?.export_allowed || state.observe?.export_allowed || {});
-  const gateState = () => (state.gateReview?.gate || state.observe?.gate || {});
-  const syncGateExportButtons = () => {
-    const observe = isObserveMode();
-    const gate = gateState();
-    const exp = gateExport();
-    const blocked = Boolean(gate.blocked);
-    const canAnno = observe ? (!blocked && Boolean(exp.annotation_layer)) : true;
-    const canReview = observe ? (!blocked && Boolean(exp.review_record)) : Boolean(state.job?.selected_id);
-    const overlayBtn = $('[data-action="export-overlay"]');
-    const archiveBtn = $('[data-action="export-archive"]');
-    const confirmBtn = $('[data-action="select-candidate"]');
-    const sampleBtn = $('[data-action="load-gate-reviewed-sample"]');
-    if (overlayBtn) overlayBtn.disabled = observe ? !canAnno : !state.image;
-    if (archiveBtn) archiveBtn.disabled = observe ? !canReview : !state.job?.selected_id;
-    if (confirmBtn) {
-      if (observe) {
-        confirmBtn.disabled = false;
-        confirmBtn.textContent = '确认复核决定';
-      }
-    }
-    if (sampleBtn) sampleBtn.classList.toggle('hidden', !observe);
-    const checklist = $('#gate-checklist');
-    if (checklist) checklist.classList.toggle('hidden', !observe);
-    const abstainInput = document.querySelector('input[name="review-decision"][value="abstain"]');
-    const abstainLabel = abstainInput ? abstainInput.closest('label') : null;
-    if (abstainLabel) abstainLabel.classList.toggle('hidden', !observe);
-    const banner = $('#gate-status-banner');
-    if (banner) {
-      const text = state.gateReview?.banner || state.observe?.banner || '';
-      if (observe && text) {
-        banner.classList.remove('hidden');
-        banner.classList.toggle('blocked', blocked);
-        banner.classList.toggle('clear', !blocked);
-        banner.textContent = text;
-      } else if (!observe) {
-        banner.classList.add('hidden');
-        banner.textContent = '';
-      }
-    }
-  };
-  const readGateChecklist = () => ({
-    repairable_checked: Boolean($('#check-repairable')?.checked),
-    uncertainty_checked: Boolean($('#check-uncertainty')?.checked),
-    unrestorable_checked: Boolean($('#check-unrestorable')?.checked),
-    literature_checked: Boolean($('#check-literature')?.checked),
-  });
-  const applyGatePayload = (payload) => {
-    if (!payload) return;
-    state.gateReview = payload;
-    if (state.observe) {
-      state.observe.gate = payload.gate;
-      state.observe.export_allowed = payload.export_allowed;
-      state.observe.banner = payload.banner;
-    }
-    if (payload.checklist) {
-      if ($('#check-repairable')) $('#check-repairable').checked = Boolean(payload.checklist.repairable_checked);
-      if ($('#check-uncertainty')) $('#check-uncertainty').checked = Boolean(payload.checklist.uncertainty_checked);
-      if ($('#check-unrestorable')) $('#check-unrestorable').checked = Boolean(payload.checklist.unrestorable_checked);
-      if ($('#check-literature')) $('#check-literature').checked = Boolean(payload.checklist.literature_checked);
-    }
-    syncGateExportButtons();
-  };
   const setAutoStatus = (text) => {
     const fallback = isProfessional() ? AUTO_HINT_PRO : AUTO_HINT;
     $('#auto-status').textContent = text || fallback;
@@ -162,17 +82,6 @@
     const note = $('#professional-note');
     if (note) note.style.opacity = on ? '1' : '.72';
     const mode = $('#repair-mode')?.value || 'conservative';
-    const scene = (mode === 'enhanced' || mode === 'speculative') ? 'B' : 'A';
-    const hint = $('#demo-step-hint');
-    const banner = $('#demo-risk-banner');
-    if (hint) {
-      hint.classList.toggle('hidden', !on);
-      hint.textContent = on ? `${DEMO_COPY[scene].step} ${DEMO_COPY[scene].gate}` : '';
-    }
-    if (banner) {
-      banner.classList.toggle('hidden', !on);
-      banner.textContent = on ? DEMO_COPY[scene].risk : '';
-    }
     const riskAck = $('#risk-ack')?.closest('label');
     if (riskAck) riskAck.style.display = on && mode === 'enhanced' ? '' : 'none';
     const allowEnhanced = $('#allow-enhanced')?.closest('label');
@@ -184,11 +93,9 @@
     if (force) force.style.display = showForce ? '' : 'none';
     const reason = $('#force-override-reason');
     if (reason) reason.classList.toggle('hidden', !(showForce && $('#force-override')?.checked));
-    // Disable run when unrestorable present
     const blocked = on && hasUnrestorableRegions();
     const runBtn = $('[data-action="run-repair"]');
     if (runBtn && blocked) runBtn.disabled = true;
-    syncGateExportButtons();
   };
   const fileUrl = (value) => value || '';
 
@@ -317,98 +224,6 @@
   }
 
 
-  const CLASS_CHIP = {
-    repairable: 'chip-repairable',
-    fillable_lacuna: 'chip-repairable',
-    uncertainty: 'chip-uncertainty',
-    uncertain: 'chip-uncertainty',
-    unrestorable: 'chip-unrestorable',
-  };
-  function clearObservePack() {
-    state.observe = null;
-    state.gateReview = null;
-    const panel = $('#observe-preview');
-    if (panel) panel.classList.add('hidden');
-    ['observe-overlay', 'observe-compare', 'observe-legend'].forEach(id => {
-      const img = $('#' + id); if (img) { img.removeAttribute('src'); img.classList.add('hidden'); }
-    });
-    const list = $('#observe-regions'); if (list) list.innerHTML = '';
-    ['check-repairable','check-uncertainty','check-unrestorable','check-literature'].forEach(id => {
-      const node = $('#' + id); if (node) node.checked = false;
-    });
-    const gbanner = $('#gate-status-banner');
-    if (gbanner) { gbanner.classList.add('hidden'); gbanner.textContent = ''; }
-    syncGateExportButtons();
-  }
-  function renderObservePack(observe) {
-    state.observe = observe || null;
-    const panel = $('#observe-preview');
-    if (!panel) return;
-    if (!observe) { clearObservePack(); return; }
-    panel.classList.remove('hidden');
-    const setImg = (id, url) => {
-      const img = $('#' + id);
-      if (!img) return;
-      if (url) { img.src = fileUrl(url); img.classList.remove('hidden'); }
-      else { img.removeAttribute('src'); img.classList.add('hidden'); }
-    };
-    setImg('observe-overlay', observe.overlay_risk_url);
-    setImg('observe-compare', observe.compare_url);
-    setImg('observe-legend', observe.legend_url);
-    const note = $('#observe-export-note');
-    if (note) note.textContent = observe.export_note || DEMO_COPY.A.export;
-    const banner = $('#demo-risk-banner');
-    if (banner) {
-      banner.classList.remove('hidden');
-      banner.textContent = observe.risk_note || DEMO_COPY.A.risk;
-    }
-    const footer = $('#demo-footer');
-    if (footer) footer.textContent = DEMO_COPY.footer;
-    const list = $('#observe-regions');
-    if (!list) return;
-    const regions = Array.isArray(observe.regions) ? observe.regions : [];
-    if (!regions.length) {
-      list.innerHTML = '<div class="empty-inline">无区域条目</div>';
-      if (observe.gate || observe.export_allowed || observe.banner) {
-        applyGatePayload({
-          gate: observe.gate,
-          export_allowed: observe.export_allowed,
-          banner: observe.banner,
-          checklist: observe.checklist,
-          candidates: observe.candidates,
-        });
-      } else {
-        syncGateExportButtons();
-      }
-      showView('results');
-      return;
-    }
-    list.innerHTML = regions.map(r => {
-      const klass = r.class || r.class_alias || 'uncertainty';
-      const chip = CLASS_CHIP[klass] || 'chip-uncertainty';
-      const allowed = r.repair_allowed ? '可候选保守填（须人工）' : '禁绘 / 不填色';
-      const evidence = (r.evidence || '').replace(/</g, '&lt;');
-      const label = (r.label || klass).replace(/</g, '&lt;');
-      return `<article class="observe-region ${chip}" data-region-id="${r.id}">
-        <header><span class="region-chip">${label}</span><span class="region-id">#${r.id}</span><span class="region-allow">${allowed}</span></header>
-        <p>${evidence}</p>
-      </article>`;
-    }).join('');
-    // Prefer results view so judges see overlay strip immediately
-    showView('results');
-    if (observe.gate || observe.export_allowed || observe.banner) {
-      applyGatePayload({
-        gate: observe.gate,
-        export_allowed: observe.export_allowed,
-        banner: observe.banner,
-        checklist: observe.checklist,
-        candidates: observe.candidates,
-      });
-    } else {
-      syncGateExportButtons();
-    }
-  }
-
   function loadImage(record) {
     if (!record) {
       state.keepEmpty = true;
@@ -419,7 +234,6 @@
       $('#culture-summary').classList.add('hidden');
       state.maskStrokes = []; state.regionStrokes = []; state.strokeOrder = []; state.currentStroke = null; state.baseMask = null; state.maskDirty = false;
       state.proposalIds = [];
-      clearObservePack();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (regionCtx) regionCtx.clearRect(0, 0, regionCanvas.width, regionCanvas.height);
       image.removeAttribute('src'); imageWrap.classList.add('hidden'); $('#empty-state').classList.remove('hidden');
@@ -440,7 +254,6 @@
       return Promise.resolve();
     }
     state.keepEmpty = false;
-    clearObservePack();
     state.image = record; state.job = null; state.candidate = null; state.proposal = null;
     state.registration = null; state.references = []; state.selectedReference = null;
     state.damageItems = []; state.selectedDamage = null;
@@ -619,8 +432,7 @@
         has_unrestorable: hasUnrestorableRegions(),
         has_uncertain: hasUncertainRegions(),
         force_override: Boolean($('#force-override')?.checked),
-        force_override_reason: ($('#force-override-reason')?.value || '').trim(),
-        contest_demo: false };
+        force_override_reason: ($('#force-override-reason')?.value || '').trim() };
       state.job = await invoke('createJob', JSON.stringify(request));
       state.candidate = null; state.maskDirty = false;
       $('#candidate-strip').innerHTML = '<div class="empty-inline">修复候选会显示在这里</div>';
@@ -1071,37 +883,6 @@
           await loadImage(null); state.image = null; $('#empty-state').classList.remove('hidden'); imageWrap.classList.add('hidden'); break;
         case 'open-image': await openImage(); break;
         case 'load-demo': { if (state.running || state.autoBusy) return toast('任务或 AI 分析进行中，完成后再载入图像。'); const record = await invoke('loadDemo'); await loadImage(record); break; }
-        case 'load-competition-demo': {
-          if (state.running || state.autoBusy) return toast('任务或 AI 分析进行中，完成后再载入图像。');
-          const pack = await invoke('loadCompetitionDemo');
-          await loadImage(pack);
-          if (pack?.observe) {
-            pack.observe.gate = pack.gate || pack.observe.gate;
-            pack.observe.export_allowed = pack.export_allowed || pack.observe.export_allowed;
-            pack.observe.banner = pack.banner || pack.observe.banner;
-          }
-          renderObservePack(pack?.observe || null);
-          if (pack?.gate_review || pack?.gate) {
-            applyGatePayload({
-              gate: pack.gate,
-              export_allowed: pack.export_allowed,
-              banner: pack.banner,
-              gate_review: pack.gate_review,
-              candidates: pack.gate_review?.candidates,
-            });
-            state.gateReview = {
-              ...(state.gateReview || {}),
-              gate: pack.gate,
-              export_allowed: pack.export_allowed,
-              banner: pack.banner,
-              gate_review: pack.gate_review,
-              candidates: pack.gate_review?.candidates,
-            };
-            syncGateExportButtons();
-          }
-          toast('已载入比赛观察包：原图 + 三色风险标注；门禁待人工复核（默认阻断导出）。');
-          break;
-        }
         case 'undo': {
           if (state.currentStroke) break;
           const last = state.strokeOrder.pop();
@@ -1147,25 +928,9 @@
         case 'cancel-job': { const identifier = state.activeJobId || state.job?.id; if (identifier) { await invoke('cancelJob', identifier); } await refresh(); break; }
         case 'resume-job': if (state.job) await invoke('resumeJob', state.job.id); await refresh(); break;
         case 'select-candidate': {
-          if (isObserveMode() && state.image) {
-            const decision = selectedDecision();
-            if (!decision) return toast('请选择：采纳 / 修改后采纳 / 驳回 / 拒答。');
-            const checklist = readGateChecklist();
-            const payload = await invoke('applyGateReview', state.image.id, JSON.stringify({
-              decision,
-              note: $('#review-note').value,
-              checklist,
-              confirm: true,
-            }));
-            applyGatePayload(payload);
-            toast(payload?.gate?.blocked
-              ? ('门禁仍阻断：' + ((payload.gate.block_reasons || []).slice(0, 2).join('；') || '请检查勾选与决策'))
-              : '复核已确认，可导出标注层 + 复核记录（禁止修复成图）。');
-            break;
-          }
           if (state.job && state.candidate) {
           const decision = selectedDecision();
-          if (isProfessional() && !decision) return toast(DEMO_COPY.B.gate);
+          if (isProfessional() && !decision) return toast('专业分步：请先选择采纳 / 修改后采纳 / 驳回。');
           const notePayload = JSON.stringify({
             note: $('#review-note').value,
             archive_as_hypothesis: Boolean($('#archive-hypothesis')?.checked),
@@ -1182,18 +947,6 @@
         } break;
         case 'export-overlay': {
           if (!state.image) return toast('请先打开一幅壁画。');
-          if (isObserveMode()) {
-            const gate = gateState();
-            const exp = gateExport();
-            if (gate.blocked || !exp.annotation_layer) {
-              return toast('门禁未放行：不能导出标注层。请先完成三色核对与复核决定。');
-            }
-            if (exp.restored_image) return toast(DEMO_COPY.B.refuse);
-            try {
-              await invoke('exportObserveAnnotation', state.image.id);
-            } catch (error) { notifyError(error); }
-            break;
-          }
           const out = document.createElement('canvas');
           out.width = canvas.width; out.height = canvas.height;
           const octx = out.getContext('2d');
@@ -1215,39 +968,7 @@
           try { await invoke('saveResult', state.candidate.id); } catch (error) { notifyError(error); }
         } break;
         case 'export-archive': {
-          if (isObserveMode() && state.image) {
-            const gate = gateState();
-            const exp = gateExport();
-            if (gate.blocked || !exp.review_record) {
-              return toast('门禁未放行：不能导出复核档案。');
-            }
-            if (exp.restored_image) return toast(DEMO_COPY.B.refuse);
-            try { await invoke('exportObserveReview', state.image.id); } catch (error) { notifyError(error); }
-            break;
-          }
           if (state.job) await invoke('exportArchive', state.job.id);
-          break;
-        }
-        case 'load-gate-reviewed-sample': {
-          if (!isObserveMode() || !state.image) return toast('请先载入比赛观察包。');
-          try {
-            const payload = await invoke('loadGateSample', 'sample-from-shibi-reviewed');
-            // Sample already has decisions; mark checklist checked for demo click-through.
-            if ($('#check-repairable')) $('#check-repairable').checked = true;
-            if ($('#check-uncertainty')) $('#check-uncertainty').checked = true;
-            if ($('#check-unrestorable')) $('#check-unrestorable').checked = true;
-            if ($('#check-literature')) $('#check-literature').checked = true;
-            applyGatePayload({
-              ...payload,
-              checklist: {
-                repairable_checked: true,
-                uncertainty_checked: true,
-                unrestorable_checked: true,
-                literature_checked: true,
-              },
-            });
-            toast('演示样例：已复核可导出（标注层+复核记录；restored_image=false）。');
-          } catch (error) { notifyError(error); }
           break;
         }
         case 'open-settings': openSettings(); break;

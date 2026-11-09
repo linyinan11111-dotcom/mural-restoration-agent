@@ -23,7 +23,7 @@ EVIDENCE_LEVELS = {'observation', 'conservative', 'enhanced', 'evidence', 'specu
 EXECUTABLE_LEVELS = {'conservative', 'enhanced', 'evidence', 'speculative'}
 MASK_SOURCES = {'ai_candidate', 'manual', 'sam', 'crack'}
 
-# Contest annotation classes (separate from repair mask_source).
+# Risk annotation classes (separate from repair mask_source).
 # Canonical vocabulary lives in risk_regions; this module re-exports it for
 # older callers and never keeps a second copy of the enum.
 from .risk_regions import (
@@ -32,7 +32,6 @@ from .risk_regions import (
     REGION_ALIASES as _RISK_ALIASES,
     normalize_region_kind as _normalize_risk_kind,
     derive_risk_flags,
-    competition_export_allowed,
 )
 
 REGION_KINDS = set(_RISK_REGION_KINDS)
@@ -48,27 +47,6 @@ DECISION_LABELS = {
     'modify': '修改后采纳',
     'reject': '驳回',
 }
-# All repair modes are available. `contest_demo` remains for older archived jobs.
-CONTEST_DEMO = False
-CONTEST_EXECUTABLE = set()
-CONTEST_LAB_ONLY = set()
-
-# Demo copy (场景 A 保守 / 场景 B 加强) — UI reads these via bridge or hardcodes same strings.
-DEMO_COPY = {
-    'footer': '本流程辅助保护观察与方案讨论，不替代文物保护专业判断。',
-    'A': {
-        'step': 'AI 仅标疑似露底/残损区域，供对照；是否属实以人工确认为准。',
-        'risk': '保守草案只做可据补全的露底填色，不补纹样、不补题记。未确认掩膜前，结果仅作观察参考。',
-        'gate': '请勾选已核对掩膜与依据，再生成保守草案。',
-    },
-    'B': {
-        'step': '加强结果含风格推断与纹样补全，属假设性预览，不能作为修复定稿。',
-        'risk': '高不确定/无依据区域已标红，禁止当作史实还原。涉及人物、题记、宗教符号时，须专家复核后再外传。',
-        'refuse': '依据不足时 AI 应停止补绘，并提示：建议仅保留原状记录与文献对照。',
-        'gate': '须人工选择：采纳 / 修改 / 驳回；未选择不得进入下一档或导出终稿。',
-    },
-}
-
 # Human-facing labels for UI / archives
 LEVEL_LABELS = {
     'observation': '观察（不执行）',
@@ -125,8 +103,7 @@ def validate_professional_create(mask_record, *, rationale, evidence_level, mode
                                  expert_notes='', mask_source=None, allow_enhanced=False,
                                  risk_acknowledged=False, mask_gate_confirmed=False,
                                  has_unrestorable=False, has_uncertain=False,
-                                 force_override=False, force_override_reason='',
-                                 contest_demo=None):
+                                 force_override=False, force_override_reason=''):
     """Gate before enqueueing a professional_step job.
 
     Risk flags are derived from the frozen mask record; the ``has_*``
@@ -147,9 +124,6 @@ def validate_professional_create(mask_record, *, rationale, evidence_level, mode
     if mask_record.get('expert_force_override') and not force_override:
         force_override = True
         force_override_reason = force_override_reason or mask_record.get('force_override_reason') or ''
-    contest = CONTEST_DEMO if contest_demo is None else bool(contest_demo)
-    if contest and (mode in {'enhanced', 'speculative'} or level in {'enhanced', 'speculative'}):
-        raise ValueError('比赛演示：禁止生成性/加强终稿，仅可导出标注层与复核记录。')
     # Speculative is off by default: mode and level must both opt in with rationale.
     if mode == 'speculative' or level == 'speculative':
         if mode != 'speculative' or level != 'speculative':
@@ -185,13 +159,12 @@ def validate_professional_create(mask_record, *, rationale, evidence_level, mode
         'has_uncertain': bool(flags['has_uncertain']),
         'force_override': bool(force_override) if flags['has_uncertain'] else False,
         'force_override_reason': (force_override_reason or '').strip()[:2000] if flags['has_uncertain'] else '',
-        'contest_demo': contest,
     }
 
 
 def enforce_mode_and_risk(*, mode, mask_record, mask_gate_confirmed=False, allow_enhanced=False,
                           risk_acknowledged=False, force_override=False,
-                          force_override_reason='', contest_demo=False):
+                          force_override_reason=''):
     """Universal gates for both standard and professional_step workflows.
 
     These are enforced at job creation *and* again before execution, so a
@@ -218,8 +191,6 @@ def enforce_mode_and_risk(*, mode, mask_record, mask_gate_confirmed=False, allow
             raise ValueError('专业分步：请勾选「已核对掩膜与依据」后再进入下一档。')
         if not risk_acknowledged:
             raise ValueError('专业分步：推测性补全须勾选风险提示已知悉。')
-    if contest_demo and mode in {'enhanced', 'speculative'}:
-        raise ValueError('比赛演示：禁止生成性/加强终稿，仅可导出标注层与复核记录。')
     return flags
 
 
@@ -238,7 +209,6 @@ def validate_job_record_for_execution(job, mask_record):
         risk_acknowledged=bool(job.get('risk_acknowledged')),
         force_override=bool(job.get('force_override')),
         force_override_reason=job.get('force_override_reason') or '',
-        contest_demo=bool(job.get('contest_demo', False)),
     )
     if normalize_workflow(job.get('workflow')) != WORKFLOW_PROFESSIONAL:
         return
@@ -254,7 +224,6 @@ def validate_job_record_for_execution(job, mask_record):
         mask_gate_confirmed=bool(job.get('mask_gate_confirmed', True)),
         force_override=bool(job.get('force_override')),
         force_override_reason=job.get('force_override_reason') or '',
-        contest_demo=job.get('contest_demo'),
     )
 
 
@@ -272,7 +241,7 @@ def validate_candidate_selection(job, candidate, *, archive_as_hypothesis=False,
     Enhanced results may be selected but are stamped selected_as='enhanced'
     (加强修复·非历史定稿) — they never replace a conservative archival path.
 
-    Contest hard gate: professional_step requires an explicit review decision
+    Review hard gate: professional_step requires an explicit review decision
     (adopt / modify / reject). Reject stops the ladder without accepting pixels.
     """
     workflow = normalize_workflow(job.get('workflow') or WORKFLOW_STANDARD)
@@ -325,23 +294,6 @@ def normalize_region_kind(value, default='fillable_lacuna'):
     return _normalize_risk_kind(value, default)
 
 
-def contest_allows_pixel_export(job, candidate=None):
-    """Contest mode: only conservative accepted evidence may leave as pixels.
-
-    Enhanced/speculative/hypothesis/rejected results stay annotation/archive-only.
-    """
-    if not job or not job.get('contest_demo'):
-        return True, ''
-    selected_as = (job.get('selected_as') or '').strip().lower()
-    if selected_as in {'hypothesis', 'rejected'}:
-        return False, '比赛演示：假设/驳回结果不能导出修复成图；仅可导出标注与复核记录。'
-    if job.get('mode') in {'enhanced', 'speculative'} or job.get('evidence_level') in {'enhanced', 'speculative'}:
-        return False, '比赛演示：加强/推测结果不能导出修复成图；仅可导出标注与复核记录。'
-    if candidate and (candidate.get('enhanced') or candidate.get('speculative')):
-        return False, '比赛演示：生成性候选不能导出修复成图。'
-    return True, ''
-
-
 def validate_selected_export(job, candidate):
     """Validate that the selected candidate may leave the app as a pixel result."""
     selected_as = (job.get('selected_as') or '').strip().lower()
@@ -350,13 +302,9 @@ def validate_selected_export(job, candidate):
         raise ValueError('该候选已被驳回，禁止导出或保存修复成图。')
     if selected_as == 'hypothesis' and not review.get('archive_as_hypothesis'):
         raise ValueError('该候选是假设性结果，须以「假设性建议归档」方式保存。')
-    allowed, reason = contest_allows_pixel_export(job, candidate)
-    if not allowed:
-        raise ValueError(reason)
     return {'selected_as': selected_as or 'accepted',
             'archive_as_hypothesis': bool(review.get('archive_as_hypothesis')),
-            'decision': review.get('decision'),
-            'contest_demo': bool(job.get('contest_demo'))}
+            'decision': review.get('decision')}
 
 
 def validate_review_decision(decision, *, require=True):
@@ -369,12 +317,3 @@ def validate_review_decision(decision, *, require=True):
     if value not in REVIEW_DECISIONS:
         raise ValueError('复核决定须为 adopt / modify / reject。')
     return value
-
-
-def refuse_insufficient_evidence():
-    """Standard refuse payload when AI should stop generative fill."""
-    return {
-        'refused': True,
-        'selected_as': 'refused',
-        'message': DEMO_COPY['B']['refuse'],
-    }

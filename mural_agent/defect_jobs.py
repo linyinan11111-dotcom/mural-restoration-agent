@@ -68,7 +68,7 @@ def run_confirmed_defects(store, engine, image_id, proposal_ids, selected_method
             workflow='professional_step', rationale=rationale,
             evidence_level='conservative', expert_notes=str(metadata.get('risk_notice') or ''),
             mask_source=proposal.get('mask_source') or 'ai_candidate',
-            mask_gate_confirmed=True, contest_demo=False)
+            mask_gate_confirmed=True)
         job = store.update('job', job['id'], defect_proposal_id=proposal_id,
                            defect_type=item_type, recommended_method=method)
         history = list(proposal.get('repair_job_history') or [])

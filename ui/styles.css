@@ -266,7 +266,7 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 }
 
 
-/* Contest demo hard-gate visuals */
+/* Risk-region overlay canvas */
 #region-canvas, .region-canvas {
   position: absolute;
   inset: 0;
@@ -276,29 +276,13 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
   z-index: 2;
 }
 #mask-canvas { z-index: 1; }
-.risk-banner {
-  margin: 8px 0 10px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: #3b1218;
-  border: 1px solid #c43c4a;
-  color: #ffd7dc;
-  font-size: 13px;
-  line-height: 1.45;
-}
-.risk-banner.soft {
-  background: #2a2418;
-  border-color: #c48a2d;
-  color: #ffe6b8;
-}
-.risk-banner.hidden { display: none; }
 .decision-row {
   flex-wrap: wrap;
   gap: 8px 14px;
   align-items: center;
   margin-bottom: 8px;
 }
-.demo-footer {
+.review-footer {
   margin: 8px 0 0;
   font-size: 12px;
   color: #8b8794;
@@ -313,107 +297,6 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 }
 
 
-/* Competition observe-pack preview */
-.observe-preview {
-  margin: 10px 0 12px;
-  padding: 12px;
-  border-radius: 10px;
-  background: #17151c;
-  border: 1px solid #3a3544;
-}
-.observe-preview.hidden { display: none; }
-.observe-heading {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: baseline;
-  margin-bottom: 10px;
-  font-size: 13px;
-}
-.observe-media {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
-}
-.observe-media figure {
-  margin: 0;
-  background: #100e14;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid #2c2833;
-}
-.observe-media img {
-  display: block;
-  width: 100%;
-  height: auto;
-  max-height: 220px;
-  object-fit: contain;
-  background: #0b0a0e;
-}
-.observe-media img.hidden { display: none; }
-.observe-media figcaption {
-  padding: 6px 8px;
-  font-size: 11px;
-  color: #9a94a6;
-}
-.observe-regions {
-  display: grid;
-  gap: 8px;
-  margin-top: 12px;
-  max-height: 220px;
-  overflow: auto;
-}
-.observe-region {
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid #3a3544;
-  background: #1d1a24;
-  font-size: 12px;
-  line-height: 1.4;
-}
-.observe-region header {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 4px;
-}
-.region-chip {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-weight: 600;
-  font-size: 11px;
-}
-.region-id { color: #8b8794; font-size: 11px; }
-.region-allow { margin-left: auto; color: #c9c3d4; font-size: 11px; }
-.observe-region p { margin: 0; color: #d7d2e0; }
-.chip-repairable { border-color: #c47a20; }
-.chip-repairable .region-chip { background: rgba(255, 140, 0, 0.22); color: #ffb347; }
-.chip-uncertainty { border-color: #c43c4a; }
-.chip-uncertainty .region-chip { background: rgba(220, 0, 60, 0.22); color: #ff8fa0; }
-.chip-unrestorable { border-color: #8b001f; }
-.chip-unrestorable .region-chip { background: rgba(139, 0, 31, 0.35); color: #ff6b84; }
-.observe-export-note {
-  margin: 10px 0 0;
-  font-size: 12px;
-  color: #b7b0c2;
-}
-
-
-/* Human-gate observe checklist + status */
-.gate-checklist { margin-top: 4px; }
-.gate-checklist.hidden { display: none; }
-#gate-status-banner.blocked {
-  background: #3b1218;
-  border-color: #c43c4a;
-  color: #ffd7dc;
-}
-#gate-status-banner.clear {
-  background: #14301c;
-  border-color: #2f8f55;
-  color: #c8f0d4;
-}
 button[data-action="export-overlay"]:disabled,
 button[data-action="export-archive"]:disabled {
   opacity: 0.45;

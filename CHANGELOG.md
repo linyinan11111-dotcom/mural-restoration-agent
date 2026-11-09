@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 2026-11-09 — 取消比赛观察模式
+
+- 移除比赛观察包入口与观察预览区、三色观察清单、门禁横幅、演示样例按钮和导出观察标注/复核记录的快捷操作。
+- 删除 `human_gate.py`、`scripts/run_demo_competition_risk.py` 以及比赛 demo 的 bridge 方法（`loadCompetitionDemo` / `applyGateReview` / `loadGateSample` / `exportObserveAnnotation` / `exportObserveReview`）和 `/api/competition-demo` 端点。
+- 移除 `contest_demo` 字段与比赛导出专用门禁；保留专业分步的风险门禁、复核决定与导出校验。
+- 复核决定（采纳 / 修改后采纳 / 驳回）保留在候选对照页，专业分步流程不受影响。
+- 全量测试 67 项通过（较取消前少一项比赛专用测试）；文档同步更新。
+
 ## 2026-11-09 — 门禁、导出与验证基线修复（P0）
 
 ### 风险与门禁
@@ -10,12 +18,12 @@
   - professional_step 中 `region_class='uncertainty'` 且未传 `has_uncertain` 时曾可直接建任务；现在会被拒绝并要求专家强制放行 + 理由。
   - `workflow='standard'` 曾可整体绕过 enhanced/speculative/risk 门禁；现在两种工作流都在建任务时和 `engine.run` 执行前双重校验，`enhanced` 必须显式勾选掩膜核对 / 允许加强 / 风险知悉，`speculative` 必须显式确认风险。
   - `unrestorable` 区域任何情况下禁止像素修复。
-- **恢复比赛观察门禁**：比赛模式不允许导出 enhanced/speculative/hypothesis/rejected 的修复成图，只能导出标注层与复核记录。
+- **比赛观察导出曾加门禁**（该模式已于同日取消，见上方条目）。
 
 ### 导出与保存
 
 - `validate_selected_export()` 统一校验复核决定：驳回的候选不能导出 ZIP；假设性结果只能导出档案（`manifest.selected_as = hypothesis`），不能保存为普通修复 PNG。
-- `engine.export` 与桌面端 `saveResult` 都使用该校验；manifest 新增 `selected_as / review / contest_demo` 字段。
+- `engine.export` 与桌面端 `saveResult` 都使用该校验；manifest 新增 `selected_as / review` 字段。
 
 ### 合成与候选
 
@@ -24,15 +32,15 @@
 
 ### 测试与验证
 
-- 更新 15 个过期测试，新增 H1/H2 门禁绕过回归、导出决定校验、薄/厚掩膜合成测试；当前 `pytest -q`：**68 passed**。
+- 更新 15 个过期测试，新增 H1/H2 门禁绕过回归、导出决定校验、薄/厚掩膜合成测试；当时 `pytest -q`：**68 passed**（取消比赛模式后为 67）。
 - 新增 GitHub Actions：非 Web 测试 + `node --check` + `compileall`。
 - 发货 WebEngine 外壳验收重跑通过：LaMa + CUDA、掩膜外差异 0、退出码 0。
 
 ### 文档与交付
 
-- 重写 `VALIDATION.md` 为当前实测基线；修正使用说明的重复章节编号、过期测试数量、风险/加强/比赛表述与内部引用。
+- 重写 `VALIDATION.md` 为当前实测基线；修正使用说明的重复章节编号、过期测试数量、风险/加强表述与内部引用。
 - 新增 MIT `LICENSE`（代码；模型权重与示例图各自许可）；新增本 CHANGELOG。
-- 明确比赛观察包/human-gate 样例位于本地 `data/`、不随仓库提供；明确本机 `dist/Shibi-1.0` 为旧构建。
+- 明确本机 `dist/Shibi-1.0` 为旧构建。
 
 ## 2026-10-31 — 早期迭代
 

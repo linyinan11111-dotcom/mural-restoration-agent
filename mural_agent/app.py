@@ -49,7 +49,6 @@ class JobRequest(BaseModel):
     has_uncertain: bool = False
     force_override: bool = False
     force_override_reason: str = ''
-    contest_demo: bool | None = False
 
 
 class ReviewRequest(BaseModel):
@@ -139,57 +138,6 @@ def create_app(settings=None):
         image.save(buffer, format='PNG')
         return add_image(buffer.getvalue(), '合成纹样练习图（非文物照片）.png')
 
-    @app.post('/api/competition-demo', status_code=201)
-    def competition_demo():
-        # Observe-only pack for contest judges — no generative mural image.
-        pack = ROOT / 'data' / 'demo_competition'
-        source = pack / 'source.jpg'
-        if not source.exists() or not (pack / 'regions.json').exists():
-            raise HTTPException(404, '未找到 data/demo_competition（需要 source.jpg 与 regions.json）。')
-        record = add_image(source.read_bytes(), '比赛观察包 · 侧面天人残片（观察标注，非生成）.jpg')
-        folder = store.folder(record['id'])
-        for name in ('overlay_risk.png', 'compare_source_overlay.png', 'legend.png', 'regions.json'):
-            src = pack / name
-            if src.exists():
-                shutil.copy2(src, folder / name)
-        regions_payload = {}
-        if (folder / 'regions.json').exists():
-            regions_payload = json.loads((folder / 'regions.json').read_text(encoding='utf-8'))
-        iid = record['id']
-        record['observe'] = {
-            'policy': regions_payload.get('policy', 'competition_observe_only'),
-            'no_generative_mural': True,
-            'overlay_risk_url': f'/api/assets/{iid}/overlay_risk.png',
-            'compare_url': f'/api/assets/{iid}/compare_source_overlay.png',
-            'legend_url': f'/api/assets/{iid}/legend.png',
-            'regions': regions_payload.get('regions', []),
-            'legend': regions_payload.get('legend', {}),
-            'notice': regions_payload.get('notice', ''),
-            'risk_note': '红区禁绘；AI 标注非病害鉴定结论。',
-            'export_note': '仅标注层 + 复核记录 + 说明，不含修复成图。',
-        }
-        from . import human_gate as hg
-        try:
-            gate_doc = hg.load_sample('sample-from-shibi-pending', root=ROOT)
-        except FileNotFoundError:
-            gate_doc = hg.apply_evaluate({
-                'run_id': f'observe-{iid[:8]}',
-                'stage': 'observe',
-                'request_flags': {'wants_generative_restore': False},
-                'candidates': [],
-                'reviewer': {'role': '文物修复人员', 'name': '', 'confirmed': False, 'confirmed_at': ''},
-            })
-        gate_doc = hg.apply_evaluate(gate_doc)
-        payload = hg.response_payload(gate_doc)
-        record['gate_review'] = gate_doc
-        record['gate'] = payload['gate']
-        record['export_allowed'] = payload['export_allowed']
-        record['banner'] = payload['banner']
-        record['observe']['gate'] = payload['gate']
-        record['observe']['export_allowed'] = payload['export_allowed']
-        record['observe']['banner'] = payload['banner']
-        return record
-
     @app.post('/api/images/{image_id}/masks', status_code=201)
     async def upload_mask(image_id: str, file: UploadFile = File(...)):
         image = require('image', image_id)
@@ -238,7 +186,7 @@ def create_app(settings=None):
             has_uncertain=request.has_uncertain,
             force_override=request.force_override,
             force_override_reason=request.force_override_reason,
-            contest_demo=request.contest_demo)
+            )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
@@ -299,17 +247,10 @@ def create_app(settings=None):
     @app.get('/api/assets/{identifier}/{name}')
     def asset(identifier: str, name: str):
         kinds = {'image.png': 'image', 'mask.png': 'mask', 'result.png': 'candidate', 'difference.png': 'candidate'}
-        observe_names = {
-            'overlay_risk.png', 'compare_source_overlay.png', 'legend.png', 'regions.json',
-        }
         path = store.folder(identifier) / name
-        if name in kinds:
-            require(kinds[name], identifier)
-        elif name in observe_names:
-            # Observe pack files live under the image folder after /api/competition-demo.
-            require('image', identifier)
-        else:
+        if name not in kinds:
             raise HTTPException(404, '文件不存在。')
+        require(kinds[name], identifier)
         if not path.is_file():
             raise HTTPException(404, '文件不存在。')
         media = 'application/json' if name.endswith('.json') else 'image/png'

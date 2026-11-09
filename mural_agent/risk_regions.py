@@ -1,4 +1,4 @@
-"""Risk region kinds for professional_step and contest observation.
+"""Risk region kinds for professional_step.
 
 Canonical vocabulary (shared by risk_regions, professional, UI and docs):
 
@@ -381,15 +381,3 @@ def build_refusal_record(*, image_id, mask_id=None, region=None, reason='', acto
         'created_at': timestamp(),
         'policy': '禁止生成纹样/图像；拒答已记档。正赛导出仅标注层+复核记录。',
     }
-
-
-def competition_export_allowed(job: dict | None = None, *, include_restored=False) -> tuple[bool, str]:
-    """正赛导出：只允许标注层+复核记录；禁用 enhanced/speculative/修复成图。"""
-    if include_restored:
-        return False, '正赛导出禁用修复成图；仅允许 overlay_risk 与复核/拒答记录。'
-    if job:
-        mode = (job.get('mode') or '').strip().lower()
-        level = (job.get('evidence_level') or '').strip().lower()
-        if mode in {'enhanced', 'speculative'} or level in {'enhanced', 'speculative'}:
-            return False, '正赛导出禁用 enhanced/speculative 产物；请导出风险标注与复核记录。'
-    return True, ''

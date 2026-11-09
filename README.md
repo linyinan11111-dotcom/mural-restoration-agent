@@ -54,7 +54,7 @@ python -m venv .venv
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest -q            # 68 passed
+.\.venv\Scripts\python.exe -m pytest -q            # 67 passed
 .\.venv\Scripts\python.exe scripts/verify_desktop.py
 ```
 
@@ -74,7 +74,7 @@ tests/             自动化回归测试
 assets/            桌面应用图标
 ```
 
-任务数据库、导入图像、修复结果和模型权重保存在本地 `data/` 与 `models/` 目录中，不包含在仓库内。比赛观察包与 human-gate 演示样例也在 `data/` 中，fresh clone 后需要自备素材才能使用对应演示按钮。
+任务数据库、导入图像、修复结果和模型权重保存在本地 `data/` 与 `models/` 目录中，不包含在仓库内。
 
 ## 许可与图像来源
 

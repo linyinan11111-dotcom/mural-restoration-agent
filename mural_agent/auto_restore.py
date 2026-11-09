@@ -228,7 +228,7 @@ def _collect_proposals(store, engine, image_record, min_confidence=MIN_CONFIDENC
         else:
             meta['mask_source'] = 'ai_candidate'
         meta['confirmed'] = False
-        # Heuristic risk class per proposal (competition: label, do not generate).
+        # Heuristic risk class per proposal (label and gate, do not auto-generate).
         try:
             from .risk_regions import classify_mask_regions, aggregate_region_class
             risk = classify_mask_regions(image, masks[item_index])

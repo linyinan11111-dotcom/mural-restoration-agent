@@ -180,9 +180,6 @@ def test_rejected_and_hypothesis_results_cannot_be_exported_as_pixels():
     allowed = validate_selected_export(
         {'selected_as': 'hypothesis', 'review': {'archive_as_hypothesis': True}}, candidate)
     assert allowed['selected_as'] == 'hypothesis'
-    with pytest.raises(ValueError, match='比赛'):
-        validate_selected_export(
-            {'contest_demo': True, 'mode': 'enhanced', 'selected_as': 'accepted'}, candidate)
 
 
 def test_workspace_create_job_unit_block(workbench):

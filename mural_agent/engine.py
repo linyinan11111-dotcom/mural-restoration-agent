@@ -332,7 +332,6 @@ class Engine:
             'random_seed': candidate.get('parameters', {}).get('seed'),
             'selected_as': selection['selected_as'],
             'review': job.get('review'),
-            'contest_demo': selection['contest_demo'],
             'notice': ('假设性建议：该档案不代表历史原貌，不能作为修复定稿。'
                        if selection['selected_as'] == 'hypothesis' else
                        '数字修复候选；无证据区域不能视为历史原貌。工程评分不是历史真实性概率。')}
