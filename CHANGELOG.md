@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 2026-11-09 — 三分屏对照与全图 AI 生成
+
+- 新增“三分屏对照”：原图 / AI 修补大面积 / 全 AI 生成三栏弹窗，可分别生成并反复查看。
+- 新增 `generateFullImage`：自动创建全图掩膜，用原图边缘做 ControlNet 引导执行全图扩散生成；结果标记为 speculative。
+- 新增 `generateLargeRepair`：把当前缺损候选掩膜取并集后走实验扩散，生成“大面积修补”栏。
+- 全图/大面积生成均需 SD 权重，结果只能按假设归档；全图生成为全新画面，不是历史复原。
+- 用真实 SD 权重跑通全图生成：任务 `review`、候选 `speculative`、掩膜外差异 0；三栏 UI 回归通过，测试 70 项通过。
+
 ## 2026-11-09 — AI 尝试性补全（实验）
 
 - 高级设置新增「允许 AI 尝试性补全大面积缺损」：自动切到 speculative + diffusion，允许大面积及 uncertain/unrestorable 掩膜；结果必须按假设归档，不能当定稿。

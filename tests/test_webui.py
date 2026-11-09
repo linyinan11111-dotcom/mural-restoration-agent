@@ -314,6 +314,13 @@ def test_damage_modal_and_manual_defect(window, qt_app):
     assert run_js(window, "!document.querySelector('#damage-modal').classList.contains('hidden')") is True
     assert len(window.bridge.store.list('proposal')) == 2
 
+    assert run_js(window, "document.querySelector('[data-action=\"close-damage-list\"]').click(); true") is True
+    assert run_js(window, "document.querySelector('[data-action=\"open-triple-view\"]').click(); true") is True
+    assert wait_until(qt_app, lambda: run_js(window, "!document.querySelector('#triple-modal').classList.contains('hidden')") is True, 10)
+    assert run_js(window, "document.querySelectorAll('.triple-panel').length") == 3
+    assert wait_until(qt_app, lambda: run_js(window, "document.querySelector('#triple-original').naturalWidth > 0") is True, 10)
+    assert run_js(window, "document.querySelector('[data-action=\"close-triple-view\"]').click(); true") is True
+
 
 def test_damage_panel_renders_candidates_and_recommendation(window, qt_app):
     script = """(() => {

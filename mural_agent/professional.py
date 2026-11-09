@@ -229,6 +229,8 @@ def validate_job_record_for_execution(job, mask_record):
         force_override_reason=job.get('force_override_reason') or '',
         allow_generative_attempt=bool(job.get('allow_generative_attempt')),
     )
+    if job.get('full_generation') and job.get('mode') != 'speculative':
+        raise ValueError('全图 AI 生成必须以 speculative 模式执行。')
     if normalize_workflow(job.get('workflow')) != WORKFLOW_PROFESSIONAL:
         return
     validate_professional_create(

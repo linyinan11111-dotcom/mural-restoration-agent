@@ -57,7 +57,7 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
                evidence_level=None, expert_notes='', mask_source=None, allow_enhanced=False,
                risk_acknowledged=False, mask_gate_confirmed=False, has_unrestorable=False,
                has_uncertain=False, force_override=False, force_override_reason='',
-               allow_generative_attempt=False):
+               allow_generative_attempt=False, full_generation=False):
     from .planner import Budget
     from .imaging import mask_array
     from .professional import (WORKFLOW_PROFESSIONAL, normalize_workflow, normalize_mask_source,
@@ -87,6 +87,8 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
         raise ValueError('推测模式必须使用扩散补全。')
     if backend == 'diffusion' and mode not in {'speculative', 'enhanced'}:
         raise ValueError('扩散补全仅允许在推测或加强修复模式下使用。')
+    if full_generation and (backend != 'diffusion' or mode != 'speculative'):
+        raise ValueError('全图 AI 生成必须使用 speculative + diffusion。')
     if structure_control and (backend != 'diffusion' or not available['controlnet']):
         raise ValueError('结构控制需要已安装的 ControlNet 和扩散工具。')
     if registration_id:
@@ -176,6 +178,7 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
            'force_override': bool(force_override) if risk_flags['has_uncertain'] else False,
            'force_override_reason': (force_override_reason or '')[:2000] if risk_flags['has_uncertain'] else '',
            'allow_generative_attempt': bool(allow_generative_attempt),
+           'full_generation': bool(full_generation),
            'selected_as': None}
     store.put('job', job)
     engine.submit(identifier)

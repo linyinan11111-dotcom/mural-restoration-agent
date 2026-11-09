@@ -216,6 +216,15 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 .damage-modal-card .notice { font-size: 11px; line-height: 1.55; }
 .damage-modal-card .proposal-preview { height: 230px; }
 .damage-highlight { position: absolute; z-index: 4; display: none; border: 2px solid #ff5a36; background: rgba(255, 90, 54, .18); box-shadow: 0 0 0 1px rgba(255, 255, 255, .65) inset; pointer-events: none; }
+.modal-card.triple-card { width: min(1120px, calc(100vw - 32px)); }
+.triple-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.triple-panel { min-width: 0; display: flex; flex-direction: column; gap: 7px; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: #f8f9fa; }
+.triple-panel h3 { margin: 0; font-size: 13px; }
+.triple-panel small { min-height: 30px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.triple-image { height: 260px; display: grid; place-items: center; overflow: hidden; background: #111; border-radius: 5px; }
+.triple-image img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.triple-image img.hidden { display: none; }
+.triple-panel .button { margin-top: auto; font-size: 11px; }
 .damage-highlight.visible { display: block; }
 .canvas-wrap.damage-drawing #mask-canvas { cursor: crosshair; }
 .manual-repair-settings { margin-top: 10px; border-top: 1px solid var(--line-soft); padding-top: 8px; }

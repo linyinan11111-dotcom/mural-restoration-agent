@@ -5,7 +5,8 @@
   const state = { bridge: null, image: null, job: null, candidate: null, keepEmpty: false, maskStrokes: [], regionStrokes: [], strokeOrder: [], currentStroke: null,
     baseMask: null, maskDirty: false, tool: 'brush', brushSize: 28, zoom: 1, promptPoints: [], promptLabels: [], promptBox: null,
     proposal: null, references: [], selectedReference: null, registration: null, lastSnapshot: null, toastTimer: null,
-    auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false, damageDrawMode: false, damageDraw: null, damageJobKey: null };
+    auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false, damageDrawMode: false, damageDraw: null, damageJobKey: null,
+    triple: { largeJobId: null, fullJobId: null } };
   const canvas = $('#mask-canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const regionCanvas = $('#region-canvas');
@@ -226,7 +227,8 @@
 
 
   function loadImage(record) {
-    clearDamageHighlight(); hideModal('damage-modal');
+    clearDamageHighlight(); hideModal('damage-modal'); hideModal('triple-modal');
+    state.triple = { largeJobId: null, fullJobId: null };
     state.damageDrawMode = false; state.damageDraw = null;
     $('#canvas-wrap')?.classList.remove('damage-drawing');
     if (!record) {
@@ -473,6 +475,7 @@
       $('[data-action="auto-restore"]').disabled = Boolean(activeJob) || state.autoBusy || !state.image;
       renderJob(state.job);
       renderHistory(snapshot.jobs || []);
+      if (!$('#triple-modal').classList.contains('hidden')) renderTriple(snapshot.jobs || []);
       const damageJobKey = (snapshot.jobs || []).map(job => `${job.id}:${job.status}:${job.defect_proposal_id || ''}`).join('|');
       if (state.damageItems.length && damageJobKey !== state.damageJobKey) {
         state.damageJobKey = damageJobKey;
@@ -795,6 +798,70 @@
     node.style.left = node.style.top = node.style.width = node.style.height = '';
   }
 
+  function renderTriple(jobs = state.lastSnapshot?.jobs || []) {
+    if (!state.image) return;
+    const original = $('#triple-original');
+    if (original) original.src = `${fileUrl(state.image.file_url)}?v=${state.image.id}`;
+    const update = (jobId, imageId, statusId) => {
+      const job = jobs.find(item => item.id === jobId);
+      const image = $('#' + imageId);
+      const status = $('#' + statusId);
+      if (!job) {
+        if (status) status.textContent = '未生成';
+        if (image) { image.classList.add('hidden'); image.removeAttribute('src'); }
+        return;
+      }
+      if (ACTIVE.includes(job.status)) {
+        if (status) status.textContent = `生成中…（${job.status}）`;
+        return;
+      }
+      if (job.status === 'failed') {
+        if (status) status.textContent = `失败：${job.error || '未知错误'}`;
+        return;
+      }
+      const candidate = (job.candidates || [])[0];
+      if (candidate?.file_url && image) {
+        image.src = `${fileUrl(candidate.file_url)}?v=${candidate.id}`;
+        image.classList.remove('hidden');
+      }
+      if (status) {
+        status.textContent = job.mode === 'speculative'
+          ? '已完成 · 推测性结果（只能按假设归档）'
+          : '已完成';
+      }
+    };
+    update(state.triple.largeJobId, 'triple-large', 'triple-large-status');
+    update(state.triple.fullJobId, 'triple-full', 'triple-full-status');
+    $$('[data-action="generate-large-panel"], [data-action="generate-full-panel"]').forEach(button => {
+      button.disabled = state.running || state.autoBusy;
+    });
+  }
+
+  function openTripleView() {
+    if (!state.image) return toast('请先打开一幅壁画。');
+    renderTriple();
+    showModal('triple-modal');
+  }
+
+  async function generateTriple(kind) {
+    if (!state.image) return toast('请先打开一幅壁画。');
+    if (state.running || state.autoBusy) return toast('当前有任务在运行，请稍候。');
+    const button = $(`[data-action="generate-${kind}-panel"]`);
+    if (button) button.disabled = true;
+    try {
+      const job = await invoke(kind === 'large' ? 'generateLargeRepair' : 'generateFullImage', state.image.id);
+      state.triple[kind === 'large' ? 'largeJobId' : 'fullJobId'] = job.id;
+      renderTriple();
+      toast(kind === 'large'
+        ? '已启动 AI 大面积修补；生成结果是推测，不是历史原貌。'
+        : '已启动全图 AI 生成；结果是推测，不是历史原貌。');
+      await refresh();
+    } catch (error) {
+      notifyError(error);
+      renderTriple();
+    }
+  }
+
   function openDamageModal() {
     if (!state.image) return toast('请先打开一幅壁画。');
     if (state.damageDrawMode) {
@@ -1044,6 +1111,10 @@
         case 'open-damage-list': openDamageModal(); break;
         case 'close-damage-list': hideModal('damage-modal'); break;
         case 'add-manual-defect': beginManualDamage(); break;
+        case 'open-triple-view': openTripleView(); break;
+        case 'close-triple-view': hideModal('triple-modal'); break;
+        case 'generate-large-panel': await generateTriple('large'); break;
+        case 'generate-full-panel': await generateTriple('full'); break;
         case 'load-demo': { if (state.running || state.autoBusy) return toast('任务或 AI 分析进行中，完成后再载入图像。'); const record = await invoke('loadDemo'); await loadImage(record); break; }
         case 'undo': {
           if (state.currentStroke) break;

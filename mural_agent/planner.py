@@ -17,6 +17,7 @@ class Step(BaseModel):
     strength: float = Field(default=0.8, ge=0.1, le=1)
     prompt: str = Field(default='', max_length=2000)
     structure_control: bool = False
+    full_generation: bool = False
 
 
 class Budget(BaseModel):

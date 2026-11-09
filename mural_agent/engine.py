@@ -127,6 +127,16 @@ class Engine:
             if step.tool == 'diffusion':
                 step.prompt = job['instructions'] or step.prompt
                 step.structure_control = job.get('structure_control', False)
+                if job.get('full_generation'):
+                    step.full_generation = True
+                    step.strength = 0.95
+                    step.structure_control = bool(self.tools.availability().get('controlnet'))
+                    if not (job.get('instructions') or '').strip():
+                        step.prompt = (
+                            'aged mural painting, full image reconstruction guided by the original '
+                            'composition, muted mineral pigments, plaster and pigment texture, '
+                            'no modern objects, no text, no watermark'
+                        )
                 if job.get('mode') == 'enhanced':
                     from .segmentation import ENHANCED_DIFFUSION_STRENGTH
                     from .professional import ENHANCED_DIFFUSION_PROMPT, ENHANCED_NEGATIVE_PROMPT

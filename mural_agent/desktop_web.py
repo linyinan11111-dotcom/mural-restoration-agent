@@ -180,6 +180,85 @@ class Bridge(QObject):
             return {**mask, 'file_url': self._file_url(self.store.folder(mask['id']) / 'mask.png')}
         return self._result(action)
 
+    @Slot(str, result=str)
+    def generateFullImage(self, image_id):
+        """Generate a full-image AI reconstruction guided by the original image."""
+        def action():
+            from io import BytesIO
+            import numpy as np
+            image = self.store.get('image', image_id)
+            if not image:
+                raise ValueError('图像记录不存在。')
+            available = self.engine.tools.availability()
+            if not available.get('diffusion'):
+                raise ValueError('全图 AI 生成需要已安装扩散模型（models/sd-inpainting）。')
+            with Image.open(self.store.folder(image['id']) / 'image.png') as source:
+                source = source.convert('RGB')
+                width, height = source.size
+            border = max(2, min(width, height) // 100)
+            mask = np.full((height, width), 255, dtype=np.uint8)
+            mask[:border, :] = mask[-border:, :] = 0
+            mask[:, :border] = mask[:, -border:] = 0
+            buffer = BytesIO()
+            Image.fromarray(mask).save(buffer, format='PNG')
+            mask_record = workspace.add_mask(
+                self.store, image, buffer.getvalue(), mask_source='manual',
+                user_confirmed=True, region_class='fillable_lacuna')
+            job = workspace.create_job(
+                self.store, self.engine, image, mask_record, 'diffusion', 'rules', 1,
+                '全图 AI 生成：以原图结构为引导，重新生成完整画面；结果仅为假设性示意。',
+                mode='speculative', workflow='professional_step',
+                rationale='用户要求按原图进行全图 AI 生成；结果不是历史原貌，仅作方案示意。',
+                evidence_level='speculative', mask_gate_confirmed=True,
+                risk_acknowledged=True, allow_generative_attempt=True,
+                structure_control=bool(available.get('controlnet')),
+                full_generation=True)
+            return self._job(job)
+        return self._result(action)
+
+    @Slot(str, result=str)
+    def generateLargeRepair(self, image_id):
+        """Run experimental diffusion over the union of all detected defects."""
+        def action():
+            from io import BytesIO
+            import numpy as np
+            image = self.store.get('image', image_id)
+            if not image:
+                raise ValueError('图像记录不存在。')
+            available = self.engine.tools.availability()
+            if not available.get('diffusion'):
+                raise ValueError('AI 大面积修补需要已安装扩散模型（models/sd-inpainting）。')
+            masks = []
+            for proposal in self.store.list('proposal'):
+                if proposal.get('image_id') != image_id:
+                    continue
+                path = self.store.folder(proposal['id']) / 'mask.png'
+                if path.is_file():
+                    masks.append(mask_array(path) > 0)
+            if not masks:
+                raise ValueError('当前图像还没有缺损候选；请先做 AI 分析或手动添加缺损。')
+            height, width = masks[0].shape
+            union = np.zeros((height, width), dtype=bool)
+            for item in masks:
+                if item.shape == union.shape:
+                    union |= item
+            if not union.any() or union.all():
+                raise ValueError('缺损候选掩膜不可用，请重新分析或手动画选区。')
+            buffer = BytesIO()
+            Image.fromarray(union.astype(np.uint8) * 255).save(buffer, format='PNG')
+            mask_record = workspace.add_mask(
+                self.store, image, buffer.getvalue(), proposal_ids=[],
+                mask_source='manual', user_confirmed=True, region_class='fillable_lacuna')
+            job = workspace.create_job(
+                self.store, self.engine, image, mask_record, 'diffusion', 'rules', 1,
+                'AI 大面积修补：对当前所有缺损候选的并集做扩散生成；结果为假设性示意。',
+                mode='speculative', workflow='professional_step',
+                rationale='用户要求 AI 修补大面积缺损；并集区域为推测性生成，不是历史复原。',
+                evidence_level='speculative', mask_gate_confirmed=True,
+                risk_acknowledged=True, allow_generative_attempt=True)
+            return self._job(job)
+        return self._result(action)
+
     @Slot(str, str, result=str)
     def addManualDefect(self, image_id, payload_json):
         """Add a user-drawn rectangular defect (normalized bbox 0..1000)."""
