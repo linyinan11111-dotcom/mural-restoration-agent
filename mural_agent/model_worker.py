@@ -72,12 +72,9 @@ def execute(request):
         import numpy as np
         control_array = np.asarray(canvas).copy()
         if step.get('full_generation'):
-            # Full-image generation uses the original image structure (edges) as
-            # the ControlNet condition instead of blanking the full mask.
-            import cv2
-            gray = cv2.cvtColor(control_array, cv2.COLOR_RGB2GRAY)
-            edges = cv2.Canny(gray, 60, 150)
-            control_array = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
+            # Full-image generation keeps the original RGB image as the
+            # ControlNet condition so colour/structure are not reduced to edges.
+            control_array = np.asarray(canvas).copy()
         else:
             control_array[np.asarray(mask_canvas) > 127] = 255
         args['control_image'] = Image.fromarray(control_array)
