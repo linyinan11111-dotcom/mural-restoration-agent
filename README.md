@@ -54,11 +54,13 @@ python -m venv .venv
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q            # 68 passed
 .\.venv\Scripts\python.exe scripts/verify_desktop.py
 ```
 
-测试包含本地业务逻辑、API 开发适配器和 Qt WebEngine 桌面桥接。完整依赖清单见 [requirements.txt](requirements.txt)、[requirements-models.txt](requirements-models.txt) 和 [requirements-dev.txt](requirements-dev.txt)。
+测试包含本地业务逻辑、API 开发适配器和 Qt WebEngine 桌面桥接。CI（`.github/workflows/tests.yml`）在 Windows 上运行非 WebEngine 测试、`node --check` 与 `compileall`。完整依赖清单见 [requirements.txt](requirements.txt)、[requirements-models.txt](requirements-models.txt) 和 [requirements-dev.txt](requirements-dev.txt)。
+
+变更记录见 [CHANGELOG.md](CHANGELOG.md)，验证基线见 [VALIDATION.md](VALIDATION.md)。
 
 ## 目录
 
@@ -72,8 +74,8 @@ tests/             自动化回归测试
 assets/            桌面应用图标
 ```
 
-任务数据库、导入图像、修复结果和模型权重保存在本地 `data/` 与 `models/` 目录中，不包含在仓库内。
+任务数据库、导入图像、修复结果和模型权重保存在本地 `data/` 与 `models/` 目录中，不包含在仓库内。比赛观察包与 human-gate 演示样例也在 `data/` 中，fresh clone 后需要自备素材才能使用对应演示按钮。
 
 ## 许可与图像来源
 
-仓库未提供代码许可证；公开可见不代表获得再分发或商用许可。示例壁画图像各自的来源和许可见 [`图片/来源与许可.md`](图片/来源与许可.md) 及 `datasets/public-fresco-smoke/` 中的元数据。不同图像和模型权重可能有不同许可，使用前请核对其来源说明和模型卡。
+代码以 **MIT License** 发布，见 [`LICENSE`](LICENSE)。模型权重、示例图像与数据集**不在 MIT 范围内**：示例壁画图像各自的来源和许可见 [`图片/来源与许可.md`](图片/来源与许可.md) 及 `datasets/public-fresco-smoke/` 中的元数据；各模型权重许可见 `models/*/provenance.json` 与上游模型卡。使用前请逐项核对。

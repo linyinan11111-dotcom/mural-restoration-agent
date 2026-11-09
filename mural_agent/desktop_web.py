@@ -227,9 +227,12 @@ class Bridge(QObject):
                     'candidates': [],
                     'reviewer': {'role': '文物修复人员', 'name': '', 'confirmed': False, 'confirmed_at': ''},
                 }
+                from .risk_regions import normalize_region_kind
                 for region in regions_payload.get('regions', []):
-                    klass = region.get('class') or region.get('class_alias') or 'uncertainty'
-                    unc = {'repairable': 'medium', 'uncertainty': 'high', 'unrestorable': 'irrecoverable'}.get(klass, 'high')
+                    klass = normalize_region_kind(
+                        region.get('class') or region.get('class_alias') or 'uncertain')
+                    unc = {'fillable_lacuna': 'medium', 'uncertain': 'high',
+                           'unrestorable': 'irrecoverable'}[klass]
                     gate_doc['candidates'].append({
                         'id': region.get('id'),
                         'kind': 'damage_annotation',

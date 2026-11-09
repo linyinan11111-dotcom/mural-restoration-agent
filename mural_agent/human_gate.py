@@ -30,17 +30,27 @@ GATE_TO_UI = {
 SHANGHAI = timezone(timedelta(hours=8))
 
 
+def _kind(value):
+    """Normalize legacy/current region names to the canonical risk vocabulary."""
+    try:
+        from .risk_regions import normalize_region_kind
+        return normalize_region_kind(value or "uncertain")
+    except (ValueError, TypeError):
+        return "uncertain"
+
+
 def evaluate(doc: dict) -> dict:
     """Return gate + export_allowed for a review document."""
     reasons = []
     for c in doc.get("candidates", []):
         cid = c.get("id")
         decision = c.get("decision")
+        kind = _kind(c.get("region_kind"))
         if decision == "pending":
             reasons.append(f"候选 {cid} 仍为 pending")
-        if (c.get("uncertainty") == "irrecoverable" or c.get("region_kind") == "unrestorable") and decision not in ABSTAIN_OK:
+        if (c.get("uncertainty") == "irrecoverable" or kind == "unrestorable") and decision not in ABSTAIN_OK:
             reasons.append(f"不可复原区 {cid} 未 reject/abstain")
-        if c.get("region_kind") == "uncertainty" and decision == "approve":
+        if kind == "uncertain" and decision == "approve":
             reasons.append(f"高不确定区 {cid} 不可直接 approve 为可修，请 correct 后降级或 abstain/reject")
         if c.get("kind") in BANNED_KINDS and decision not in ABSTAIN_OK:
             reasons.append(f"禁生成：候选 {cid} kind={c.get('kind')} 须 reject/abstain")
@@ -190,10 +200,11 @@ def default_note_for(decision: str, region_kind: str | None, note: str) -> str:
     text = (note or "").strip()
     if text:
         return text
+    kind = _kind(region_kind)
     if decision == "abstain":
-        if region_kind == "uncertainty":
+        if kind == "uncertain":
             return "依据不足：高不确定区默认拒答补绘，仅保留标注"
-        if region_kind == "unrestorable":
+        if kind == "unrestorable":
             return "不可复原区：禁修禁生成，拒答补绘"
         return "依据不足 / 涉及补绘生成 → 已拒答，仅保留原状记录。"
     if decision == "reject":
@@ -224,12 +235,12 @@ def apply_bulk_decision(
     for c in out.get("candidates", []):
         if targets is not None and str(c.get("id")) not in targets:
             continue
-        kind = c.get("region_kind")
+        kind = _kind(c.get("region_kind"))
         # Hard rule: unrestorable / high-uncertainty cannot be plain approve
         final = decision
         if kind == "unrestorable" and decision in {"approve", "correct"}:
             final = "abstain"
-        if kind == "uncertainty" and decision == "approve":
+        if kind == "uncertain" and decision == "approve":
             final = "abstain"
         c["decision"] = final
         note_text = default_note_for(final, kind, note)
