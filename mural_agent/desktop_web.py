@@ -481,9 +481,16 @@ class Bridge(QObject):
     @Slot(str, result=str)
     def saveResult(self, candidate_id):
         def action():
+            from .professional import validate_selected_export
             job = next((j for j in self.store.list('job') if any(c.get('id') == candidate_id for c in j.get('candidates') or [])), None)
             if not job:
                 raise ValueError('修复候选不存在。')
+            if job.get('selected_id') != candidate_id:
+                raise ValueError('请先在候选对照中选择并确认该候选，再保存修复图像。')
+            candidate = next(c for c in job['candidates'] if c['id'] == candidate_id)
+            selection = validate_selected_export(job, candidate)
+            if selection['selected_as'] in {'rejected', 'hypothesis'}:
+                raise ValueError('驳回或假设性结果不能保存为修复图像；请改用「导出修复档案」并标注为假设。')
             path, _ = QFileDialog.getSaveFileName(None, '保存修复结果', 'restored.png', 'PNG 图像 (*.png)')
             if path:
                 shutil.copy2(self.store.folder(candidate_id) / 'result.png', path)

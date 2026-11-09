@@ -276,7 +276,7 @@ def _collect_proposals(store, engine, image_record, min_confidence=MIN_CONFIDENC
         defect['proposal_id'] = None
         defect['recommendation'] = route_items([item], available)[0]
         defect['repair_allowed'] = False
-        defect['region_class'] = 'uncertainty'
+        defect['region_class'] = 'uncertain'
         defect['risk_notice'] = omitted.pop(key)
         defect['confirmed'] = False
         defects.append(defect)

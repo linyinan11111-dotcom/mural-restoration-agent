@@ -54,14 +54,19 @@ def composite(original, prediction, mask):
         raise ValueError('图像与掩膜尺寸不一致。')
     if np.array_equal(original, prediction):
         return original.copy()
-    # Blend inward from the mask edge to avoid a pasted-on hard boundary.
     active = mask > 0
     if not active.any():
         return original.copy()
-    distance = cv2.distanceTransform(active.astype(np.uint8), cv2.DIST_L2, 3)
-    alpha = np.clip(distance / 6.0, 0, 1)[..., None]
-    blended = original.astype(np.float32) * (1 - alpha) + np.asarray(prediction, dtype=np.float32) * alpha
     output = original.copy()
+    distance = cv2.distanceTransform(active.astype(np.uint8), cv2.DIST_L2, 3)
+    # Thin masks (hairline cracks) must be replaced at full strength; feathering
+    # them would erase most of the repair. Thicker masks blend only in a narrow
+    # boundary band and keep the prediction untouched inside.
+    if float(distance[active].max()) < 4.0:
+        output[active] = np.clip(prediction[active], 0, 255).astype(np.uint8)
+        return output
+    alpha = np.clip((distance - 1.0) / 3.0, 0, 1)[..., None]
+    blended = original.astype(np.float32) * (1 - alpha) + np.asarray(prediction, dtype=np.float32) * alpha
     output[active] = np.clip(blended[active], 0, 255).astype(np.uint8)
     return output
 

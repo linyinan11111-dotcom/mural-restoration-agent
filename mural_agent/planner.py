@@ -87,7 +87,12 @@ def rule_plan(backend, count, fraction):
 
 
 def diversify_repair_methods(plan, backend, count, available, include_reference=False):
-    """Ensure conservative comparison candidates use distinct inpainting methods."""
+    """Honor the requested candidate count while preferring distinct methods.
+
+    Distinct algorithms are used first; if fewer methods are available than the
+    requested count (e.g. no LaMa, only Telea/NS), the remainder are radius
+    variants so the user still gets the number of candidates they asked for.
+    """
     if backend not in {'opencv', 'lama', 'telea', 'ns'} or count < 2:
         return plan
     preferred = (['lama', 'telea', 'ns'] if backend == 'lama' else
@@ -96,20 +101,38 @@ def diversify_repair_methods(plan, backend, count, available, include_reference=
     if include_reference:
         preferred.insert(1, 'reference')
     methods = [tool for tool in preferred if tool != 'lama' or available.get('lama')]
-    if len(methods) < 2:
+    if not methods:
         return plan
     source_steps = {step.tool: step for step in plan.steps}
     labels = {'lama': 'LaMa 纹理补全', 'telea': 'Telea 快速行进法',
               'ns': 'Navier–Stokes 边缘传播', 'reference': '已核验同壁画参考转移'}
+    plan_entries = []
+    for tool in methods[:count]:
+        plan_entries.append((tool, None, True))
+    variants = [('telea', 7), ('ns', 6), ('telea', 9), ('ns', 8)]
+    index = 0
+    while len(plan_entries) < count:
+        tool, radius = variants[index % len(variants)]
+        index += 1
+        if tool == 'lama' and not available.get('lama'):
+            tool = 'telea'
+        plan_entries.append((tool, radius, False))
     varied = []
-    for index, tool in enumerate(methods[:count]):
+    for position, (tool, radius, distinct) in enumerate(plan_entries):
         source = source_steps.get(tool)
-        varied.append(source.model_copy(update={
-            'reason': f'方法对照候选 {index + 1}：{labels[tool]}，独立从原图修复。',
-        }) if source else Step(tool=tool, radius=3 if tool not in {'ns', 'reference'} else 4,
-                               reason=f'方法对照候选 {index + 1}：{labels[tool]}，独立从原图修复。'))
+        if source is not None and distinct:
+            varied.append(source.model_copy(update={
+                'reason': f'方法对照候选 {position + 1}：{labels[tool]}，独立从原图修复。',
+            }))
+            continue
+        base_radius = radius if radius is not None else source.radius if source is not None else (
+            3 if tool not in {'ns', 'reference'} else 4)
+        varied.append(Step(tool=tool, radius=base_radius,
+                           reason=(f'方法对照候选 {position + 1}：{labels[tool]}，独立从原图修复。'
+                                   if distinct else
+                                   f'参数对照候选 {position + 1}：{labels[tool]}（半径 {base_radius}），独立从原图修复。')))
     plan.steps = varied
-    plan.summary = (plan.summary + ' 候选采用不同算法，便于直接比较。')[:2000]
+    plan.summary = (plan.summary + ' 候选优先采用不同算法，不足时用不同半径补足。')[:2000]
     return plan
 
 

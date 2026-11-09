@@ -26,11 +26,8 @@ def add_mask(store, image_record, payload, proposal_ids=None, mask_source='manua
              region_class='fillable_lacuna', risk_regions=None, expert_force_override=False,
              force_override_reason=''):
     from .professional import normalize_mask_source
-    try:
-        from .risk_regions import normalize_region_class
-        klass = normalize_region_class(region_class)
-    except Exception:
-        klass = (region_class or 'fillable_lacuna')
+    from .risk_regions import normalize_region_class
+    klass = normalize_region_class(region_class)
     mask = decode_image(payload, mask=True)
     if mask.size != (image_record['width'], image_record['height']):
         raise ValueError('掩膜必须与工作图尺寸一致。')
@@ -64,7 +61,8 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
     from .planner import Budget
     from .imaging import mask_array
     from .professional import (WORKFLOW_PROFESSIONAL, normalize_workflow, normalize_mask_source,
-                               validate_professional_create)
+                               validate_professional_create, enforce_mode_and_risk)
+    from .risk_regions import derive_risk_flags
     available = engine.tools.availability()
     workflow = normalize_workflow(workflow)
     if backend == 'lama' and not engine.lama.available():
@@ -102,17 +100,27 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
         editable = mask_array(store.folder(mask_record['id'])/'mask.png')
         if ((editable > 0) & (approved == 0)).any():
             raise ValueError('修复区域超出已核验参考范围。')
+    # Risk flags are always derived from the frozen mask record; the has_* UI
+    # booleans are intentionally ignored so a stale/forged client cannot bypass
+    # the uncertain/unrestorable gates.
+    risk_flags = derive_risk_flags(mask_record)
+    if mask_record.get('expert_force_override') and not force_override:
+        force_override = True
+        force_override_reason = force_override_reason or mask_record.get('force_override_reason') or ''
+    contest = bool(contest_demo) if contest_demo is not None else False
+    enforce_mode_and_risk(
+        mode=mode,
+        mask_record=mask_record,
+        mask_gate_confirmed=bool(mask_gate_confirmed),
+        allow_enhanced=bool(allow_enhanced),
+        risk_acknowledged=bool(risk_acknowledged),
+        force_override=bool(force_override),
+        force_override_reason=force_override_reason,
+        contest_demo=contest,
+    )
     professional_meta = {}
     if workflow == WORKFLOW_PROFESSIONAL:
         # Prefer dedicated rationale; fall back to instructions for API callers.
-        region_class = (mask_record.get('region_class') or '')
-        if region_class == 'unrestorable':
-            has_unrestorable = True
-        if region_class == 'uncertain':
-            has_uncertain = True
-        if mask_record.get('expert_force_override'):
-            force_override = True
-            force_override_reason = force_override_reason or mask_record.get('force_override_reason') or ''
         professional_meta = validate_professional_create(
             mask_record,
             rationale=rationale or instructions,
@@ -123,11 +131,9 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
             allow_enhanced=allow_enhanced,
             risk_acknowledged=risk_acknowledged,
             mask_gate_confirmed=mask_gate_confirmed,
-            has_unrestorable=has_unrestorable,
-            has_uncertain=has_uncertain,
             force_override=force_override,
             force_override_reason=force_override_reason,
-            contest_demo=contest_demo,
+            contest_demo=contest,
         )
     elif evidence_level:
         # Allow optional provenance fields on standard jobs without full gates.
@@ -166,11 +172,11 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
            'allow_enhanced': bool(professional_meta.get('allow_enhanced') or (mode == 'enhanced' and allow_enhanced)),
            'risk_acknowledged': bool(professional_meta.get('risk_acknowledged')),
            'mask_gate_confirmed': bool(professional_meta.get('mask_gate_confirmed')),
-           'has_unrestorable': bool(professional_meta.get('has_unrestorable')),
-           'has_uncertain': bool(professional_meta.get('has_uncertain')),
-           'force_override': bool(professional_meta.get('force_override')),
-           'force_override_reason': professional_meta.get('force_override_reason') or '',
-           'contest_demo': bool(professional_meta.get('contest_demo', False)),
+           'has_unrestorable': bool(risk_flags['has_unrestorable']),
+           'has_uncertain': bool(risk_flags['has_uncertain']),
+           'force_override': bool(force_override) if risk_flags['has_uncertain'] else False,
+           'force_override_reason': (force_override_reason or '')[:2000] if risk_flags['has_uncertain'] else '',
+           'contest_demo': contest,
            'selected_as': None}
     store.put('job', job)
     engine.submit(identifier)

@@ -108,6 +108,51 @@ def test_compositing_discards_all_unmasked_model_changes():
     assert np.all(result[mask > 0] == 255)
 
 
+def test_thin_mask_composite_keeps_full_repair_strength():
+    original = np.full((8, 12, 3), [30, 60, 90], dtype=np.uint8)
+    prediction = np.full_like(original, 255)
+    mask = np.zeros((8, 12), dtype=np.uint8)
+    mask[4, 3:9] = 255  # 1 px hairline crack
+    result = composite(original, prediction, mask)
+    assert np.array_equal(result[mask == 0], original[mask == 0])
+    assert np.all(result[mask > 0] == 255)
+
+
+def test_thick_mask_composite_feathers_boundary_not_interior():
+    original = np.full((40, 40, 3), [20, 40, 60], dtype=np.uint8)
+    prediction = np.full_like(original, 220)
+    mask = np.zeros((40, 40), dtype=np.uint8)
+    mask[8:32, 8:32] = 255
+    result = composite(original, prediction, mask)
+    assert np.array_equal(result[mask == 0], original[mask == 0])
+    assert np.all(result[18:22, 18:22] == 220)
+
+
+def test_export_blocks_rejected_and_unflagged_hypothesis(workbench):
+    client, app = workbench
+    image, mask_record, *_ = upload_case(client)
+    response = client.post('/api/jobs', json={'image_id': image['id'], 'mask_id': mask_record['id'], 'candidate_count': 1})
+    job = wait_job(client, response.json()['id'])
+    chosen = job['candidates'][0]
+    assert client.post(f'/api/jobs/{job["id"]}/review',
+                       json={'candidate_id': chosen['id'], 'note': 'ok'}).status_code == 200
+    store = app.state.store
+    store.update('job', job['id'], selected_as='rejected', review={'decision': 'reject'})
+    blocked = client.get(f'/api/jobs/{job["id"]}/export')
+    assert blocked.status_code == 400 and '驳回' in blocked.json()['detail']
+    store.update('job', job['id'], selected_as='hypothesis',
+                 review={'decision': 'adopt', 'archive_as_hypothesis': False})
+    blocked = client.get(f'/api/jobs/{job["id"]}/export')
+    assert blocked.status_code == 400 and '假设' in blocked.json()['detail']
+    store.update('job', job['id'], selected_as='hypothesis',
+                 review={'decision': 'adopt', 'archive_as_hypothesis': True})
+    archive = client.get(f'/api/jobs/{job["id"]}/export')
+    assert archive.status_code == 200
+    with zipfile.ZipFile(BytesIO(archive.content)) as zipped:
+        manifest = json.loads(zipped.read('manifest.json'))
+        assert manifest['selected_as'] == 'hypothesis'
+
+
 def test_transparent_white_is_not_an_editable_mask_region():
     rgba = np.full((8, 8, 4), 255, dtype=np.uint8)
     rgba[..., 3] = 0

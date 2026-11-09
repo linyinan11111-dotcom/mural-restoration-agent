@@ -227,7 +227,8 @@ def test_auto_restore_creates_a_traceable_autonomous_job(window, qt_app, monkeyp
     assert job['candidates'][0]['metrics']['outside_unchanged']
 
 
-def test_auto_restore_button_drives_the_frontend_to_results(window, qt_app, monkeypatch):
+def test_auto_analyze_button_shows_defect_list_without_submitting(window, qt_app, monkeypatch):
+    """The AI button now analyzes and lists defects; it must not auto-create a job."""
     import mural_agent.auto_restore as auto_module
 
     monkeypatch.setattr(auto_module, 'assess_image', lambda engine, record: {
@@ -255,15 +256,13 @@ def test_auto_restore_button_drives_the_frontend_to_results(window, qt_app, monk
     assert wait_until(qt_app, lambda: json.loads(window.bridge.snapshot())['aux'].get('status') in {'done', 'error'}, 30)
     aux = json.loads(window.bridge.snapshot())['aux']
     assert aux['status'] == 'done', aux
-    assert wait_until(qt_app, lambda: run_js(window, "document.querySelector('#results-view').classList.contains('active')") is True, 30)
-    job_id = aux['result']['auto']['job']['id']
-
-    def job_done():
-        jobs = json.loads(window.bridge.snapshot())['jobs']
-        return next(entry for entry in jobs if entry['id'] == job_id)['status'] not in ACTIVE
-
-    assert wait_until(qt_app, job_done, 30)
-    assert wait_until(qt_app, lambda: run_js(window, "document.querySelectorAll('.candidate-card').length") >= 1, 20)
+    auto = aux['result']['auto']
+    assert auto['job'] is None, 'analysis must not enqueue a repair job'
+    assert auto.get('awaiting_confirmation') is True
+    assert auto['defects']
+    assert wait_until(qt_app, lambda: run_js(window, "document.querySelectorAll('.damage-item').length") >= 1, 20)
+    assert run_js(window, "document.querySelector('#results-view').classList.contains('active')") is False
+    assert json.loads(window.bridge.snapshot())['jobs'] == []
 
 
 def test_damage_panel_renders_candidates_and_recommendation(window, qt_app):

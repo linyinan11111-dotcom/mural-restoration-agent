@@ -954,7 +954,8 @@
       const status = job ? `任务${['review', 'completed'].includes(job.status) ? '已完成' : job.status === 'failed' ? '失败' : '进行中'}` : '';
       const method = item.recommendation?.method || damageRecommendation(item);
       const selectedMethod = item.selectedMethod || 'recommended';
-      const blocked = !item.proposal_id || !item.repair_allowed || item.region_class !== 'repairable';
+      const blocked = !item.proposal_id || !item.repair_allowed
+        || !['fillable_lacuna', 'repairable'].includes(item.region_class);
       const alreadyQueued = job && ACTIVE.includes(job.status);
       const busy = state.running || state.autoBusy;
       const blocker = item.risk_notice || (blocked ? '请先人工复核风险分类；当前不能一键修复。' : '');
@@ -982,12 +983,12 @@
     $$('[data-run-defect]').forEach(button => button.addEventListener('click', () => runDefectRepairs([Number(button.dataset.runDefect)]).catch(notifyError)));
     $('#damage-note').textContent = (limitations || '') || 'AI 识别、类别与掩膜提取都只是候选，需人工检查；不能替代病害鉴定。';
     if (state.selectedDamage === null) selectDamage(0);
-    $('[data-action="run-all-defects"]').disabled = state.running || state.autoBusy || !state.damageItems.some(item => item.confirmed && item.proposal_id && item.repair_allowed && item.region_class === 'repairable' && !jobs.some(job => job.defect_proposal_id === item.proposal_id && ACTIVE.includes(job.status)));
+    $('[data-action="run-all-defects"]').disabled = state.running || state.autoBusy || !state.damageItems.some(item => item.confirmed && item.proposal_id && item.repair_allowed && ['fillable_lacuna', 'repairable'].includes(item.region_class) && !jobs.some(job => job.defect_proposal_id === item.proposal_id && ACTIVE.includes(job.status)));
   }
 
   async function runDefectRepairs(indexes) {
     if (state.running || state.autoBusy) return toast('请等待当前分析或修复任务完成。');
-    const selected = indexes.map(index => state.damageItems[index]).filter(item => item && item.confirmed && item.proposal_id && item.repair_allowed && item.region_class === 'repairable');
+    const selected = indexes.map(index => state.damageItems[index]).filter(item => item && item.confirmed && item.proposal_id && item.repair_allowed && ['fillable_lacuna', 'repairable'].includes(item.region_class));
     if (!selected.length) return toast('请先确认至少一个可保守修复的缺损项。');
     const result = await invoke('runDefectRepairs', JSON.stringify({
       image_id: state.image.id, proposal_ids: selected.map(item => item.proposal_id), confirmed: true,
