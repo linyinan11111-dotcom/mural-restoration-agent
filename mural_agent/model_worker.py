@@ -1,4 +1,4 @@
-﻿"""One-shot worker. May run under a separate MURAL_WORKER_PYTHON environment."""
+"""One-shot worker. May run under a separate MURAL_WORKER_PYTHON environment."""
 from pathlib import Path
 import json
 import sys
@@ -73,7 +73,12 @@ def execute(request):
     if step.get('structure_control'):
         import numpy as np
         control_array = np.asarray(canvas).copy()
-        control_array[np.asarray(mask_canvas) > 127] = 255
+        if step.get('full_generation'):
+            # Full-image generation keeps the original RGB image as the
+            # ControlNet condition so colour/structure are not reduced to edges.
+            control_array = np.asarray(canvas).copy()
+        else:
+            control_array[np.asarray(mask_canvas) > 127] = 255
         args['control_image'] = Image.fromarray(control_array)
     result = pipe(**args)
     if result.nsfw_content_detected and any(result.nsfw_content_detected):

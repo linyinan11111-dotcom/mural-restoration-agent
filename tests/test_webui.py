@@ -88,7 +88,7 @@ def test_shipped_shell_loads_and_exposes_bridge(window, qt_app):
     assert snapshot['models']['lama'] is False
     assert snapshot['aux_version'] >= 0
     assert run_js(window, "document.title || ''") != ''
-    assert run_js(window, "Boolean(document.querySelector('#damage-list') && document.querySelector('#reference-modal') && document.querySelector('#verify-modal') && document.querySelector('#auto-button'))") is True
+    assert run_js(window, "Boolean(document.querySelector('#damage-list') && document.querySelector('#reference-modal') && document.querySelector('#verify-modal') && document.querySelector('#auto-button') && document.querySelector('#allow-generative-attempt') && document.querySelector('#damage-generative'))") is True
     # QtWebEngine has no default prompt implementation; the reference workflow must
     # not depend on window.prompt.
     assert 'window.prompt' not in (ROOT / 'ui' / 'app.js').read_text(encoding='utf-8')
@@ -227,7 +227,8 @@ def test_auto_restore_creates_a_traceable_autonomous_job(window, qt_app, monkeyp
     assert job['candidates'][0]['metrics']['outside_unchanged']
 
 
-def test_auto_restore_button_drives_the_frontend_to_results(window, qt_app, monkeypatch):
+def test_auto_analyze_button_shows_defect_list_without_submitting(window, qt_app, monkeypatch):
+    """The AI button now analyzes and lists defects; it must not auto-create a job."""
     import mural_agent.auto_restore as auto_module
 
     monkeypatch.setattr(auto_module, 'assess_image', lambda engine, record: {
@@ -255,15 +256,74 @@ def test_auto_restore_button_drives_the_frontend_to_results(window, qt_app, monk
     assert wait_until(qt_app, lambda: json.loads(window.bridge.snapshot())['aux'].get('status') in {'done', 'error'}, 30)
     aux = json.loads(window.bridge.snapshot())['aux']
     assert aux['status'] == 'done', aux
-    assert wait_until(qt_app, lambda: run_js(window, "document.querySelector('#results-view').classList.contains('active')") is True, 30)
-    job_id = aux['result']['auto']['job']['id']
+    auto = aux['result']['auto']
+    assert auto['job'] is None, 'analysis must not enqueue a repair job'
+    assert auto.get('awaiting_confirmation') is True
+    assert auto['defects']
+    assert wait_until(qt_app, lambda: run_js(window, "document.querySelectorAll('.damage-item').length") >= 1, 20)
+    assert run_js(window, "document.querySelector('#results-view').classList.contains('active')") is False
+    assert json.loads(window.bridge.snapshot())['jobs'] == []
 
-    def job_done():
-        jobs = json.loads(window.bridge.snapshot())['jobs']
-        return next(entry for entry in jobs if entry['id'] == job_id)['status'] not in ACTIVE
 
-    assert wait_until(qt_app, job_done, 30)
-    assert wait_until(qt_app, lambda: run_js(window, "document.querySelectorAll('.candidate-card').length") >= 1, 20)
+def test_damage_modal_and_manual_defect(window, qt_app):
+    assert run_js(window, "document.querySelector('[data-action=\"load-demo\"]').click(); true") is True
+    assert wait_until(qt_app, lambda: run_js(window, 'Boolean(window.__shibui.state.image)') is True, 30)
+    assert run_js(window, "document.querySelector('[data-action=\"open-damage-list\"]').click(); true") is True
+    assert wait_until(qt_app, lambda: run_js(window, "!document.querySelector('#damage-modal').classList.contains('hidden')") is True, 10)
+    assert run_js(window, "document.querySelector('[data-action=\"close-damage-list\"]').click(); true") is True
+    assert run_js(window, "document.querySelector('#damage-modal').classList.contains('hidden')") is True
+    assert run_js(window, "document.querySelector('[data-action=\"open-damage-list\"]').click(); true") is True
+    assert wait_until(qt_app, lambda: run_js(window, "!document.querySelector('#damage-modal').classList.contains('hidden')") is True, 10)
+    modal_width = run_js(window, "document.querySelector('.damage-modal-card').getBoundingClientRect().width")
+    assert modal_width >= 650, modal_width
+
+    image_id = run_js(window, 'window.__shibui.state.image.id')
+    made = json.loads(window.bridge.addManualDefect(image_id, json.dumps({
+        'bbox': [100, 120, 360, 420], 'type': 'manual', 'size': 'manual'})))
+    defect = made['defect']
+    assert defect['proposal_id']
+    proposal = window.store.get('proposal', defect['proposal_id'])
+    assert proposal['region_class'] == 'fillable_lacuna'
+    assert proposal['repair_allowed'] is True
+    assert (window.store.folder(defect['proposal_id']) / 'mask.png').is_file()
+
+    script = ("""(() => { window.__shibui.state.damageItems = [""" + json.dumps(defect) +
+              """]; window.__shibui.renderDamage(); """
+              """document.querySelector('[data-damage="0"]').click(); return true; })()""")
+    assert run_js(window, script) is True
+    assert wait_until(qt_app, lambda: run_js(window, "document.querySelector('#damage-highlight').classList.contains('visible')") is True, 10)
+    assert run_js(window, "document.querySelector('#damage-modal').classList.contains('hidden')") is True
+
+    # Draw a second defect directly through the DOM pointer handlers.
+    assert run_js(window, "document.querySelector('[data-action=\"open-damage-list\"]').click(); true") is True
+    assert run_js(window, "document.querySelector('[data-action=\"add-manual-defect\"]').click(); true") is True
+    drag = """(() => {
+      const c = document.querySelector('#mask-canvas');
+      const r = c.getBoundingClientRect();
+      const fire = (type, fx, fy, buttons) => c.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse',
+        clientX: r.left + r.width * fx, clientY: r.top + r.height * fy,
+        button: 0, buttons }));
+      fire('pointerdown', 0.55, 0.55, 1);
+      fire('pointermove', 0.75, 0.75, 1);
+      fire('pointerup', 0.75, 0.75, 0);
+      return true;
+    })()"""
+    assert run_js(window, drag) is True
+    assert wait_until(qt_app, lambda: run_js(window, 'window.__shibui.state.damageItems.length') == 2, 10)
+    assert run_js(window, "!document.querySelector('#damage-modal').classList.contains('hidden')") is True
+    assert len(window.bridge.store.list('proposal')) == 2
+
+    assert run_js(window, "document.querySelector('[data-action=\"close-damage-list\"]').click(); true") is True
+    assert run_js(window, "document.querySelector('[data-action=\"open-triple-view\"]').click(); true") is True
+    assert wait_until(qt_app, lambda: run_js(window, "!document.querySelector('#triple-modal').classList.contains('hidden')") is True, 10)
+    assert run_js(window, "document.querySelectorAll('.triple-panel').length") == 3
+    assert wait_until(qt_app, lambda: run_js(window, "document.querySelector('#triple-original').naturalWidth > 0") is True, 10)
+    # The isolated fixture has no diffusion weights; generation buttons must be
+    # disabled instead of failing only after a click.
+    assert run_js(window, "document.querySelector('[data-action=\"generate-large-panel\"]').disabled") is True
+    assert run_js(window, "document.querySelector('[data-action=\"generate-full-panel\"]').disabled") is True
+    assert run_js(window, "document.querySelector('[data-action=\"close-triple-view\"]').click(); true") is True
 
 
 def test_damage_panel_renders_candidates_and_recommendation(window, qt_app):

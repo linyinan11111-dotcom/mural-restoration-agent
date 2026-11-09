@@ -1,4 +1,6 @@
 """Whitelisted tools with versioned requests, isolated optional GPU worker."""
+from pathlib import Path
+import importlib.util
 import json
 import subprocess
 import sys
@@ -8,7 +10,7 @@ import numpy as np
 from PIL import Image
 from .imaging import image_array, mask_array, opencv_inpaint, sha256
 
-TOOLS = {'telea', 'ns', 'lama', 'reference', 'diffusion', 'denoise', 'color', 'deblur', 'research'}
+TOOLS = {'telea', 'ns', 'lama', 'reference', 'diffusion', 'imagine', 'denoise', 'color', 'deblur', 'research'}
 
 
 class ToolRegistry:
@@ -18,7 +20,8 @@ class ToolRegistry:
     def availability(self):
         s = self.engine.settings
         return {'opencv': True, 'telea': True, 'ns': True, 'lama': self.engine.lama.available(), 'reference': True,
-                'diffusion': s.imagine_ready,
+                'diffusion': (s.diffusion_model / 'model_index.json').exists() and importlib.util.find_spec('diffusers') is not None,
+                'imagine': s.imagine_ready,
                 'denoise': True, 'color': True, 'deblur': True,
                 'research': s.research_adapter.exists(), 'sam2': self.engine.sam.available(),
                 'controlnet': (s.controlnet_model / 'config.json').exists()}
@@ -57,17 +60,20 @@ class ToolRegistry:
                 blur = cv2.GaussianBlur(original, (0, 0), 1.2)
                 output = cv2.addWeighted(original, 1.5, blur, -.5, 0)
             return output, {'device': 'cpu', 'opencv': cv2.__version__, 'method': {'color': 'local_tone_match', 'deblur': 'unsharp_mask', 'denoise': 'nlmeans'}[step.tool]}
-        if step.tool == 'diffusion':
-            if job.get('mode') not in {'speculative', 'enhanced'}:
-                raise ValueError('云端生图仅允许在推测性补全或加强修复模式执行。')
-            from .imagine import ImagineClient, ImagineConfig
-            config = ImagineConfig.from_settings(s)
-            prompt = step.prompt or job.get('instructions') or ''
-            generated, meta = ImagineClient(config).edit(original, mask, prompt)
-            if job.get('structure_control'):
-                meta['structure_control'] = False
-                meta['structure_note'] = '云端生图不使用本机 ControlNet。'
+        if step.tool == 'imagine':
+            if job.get('mode') != 'speculative':
+                raise ValueError('云端全图重绘必须在推测性补全模式执行。')
+            from .imagine import FULL_REDRAW_PROMPT, ImagineClient, ImagineConfig
+            client = ImagineClient(ImagineConfig.from_settings(s))
+            prompt = step.prompt or job.get('instructions') or FULL_REDRAW_PROMPT
+            if job.get('full_generation'):
+                generated, meta = client.redraw(original, prompt)
+                meta['full_generation'] = True
+            else:
+                generated, meta = client.edit(original, mask, prompt)
             return generated, meta
+        if step.tool == 'diffusion' and job.get('mode') not in {'speculative', 'enhanced'}:
+            raise ValueError('扩散生成仅允许在推测性补全或加强修复模式执行。')
         # Release resident models before launching a separate interpreter on a 12GB GPU.
         engine.lama.unload()
         engine.sam.unload()

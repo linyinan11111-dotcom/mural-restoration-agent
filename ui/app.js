@@ -5,7 +5,8 @@
   const state = { bridge: null, image: null, job: null, candidate: null, keepEmpty: false, maskStrokes: [], regionStrokes: [], strokeOrder: [], currentStroke: null,
     baseMask: null, maskDirty: false, tool: 'brush', brushSize: 28, zoom: 1, promptPoints: [], promptLabels: [], promptBox: null,
     proposal: null, references: [], selectedReference: null, registration: null, lastSnapshot: null, toastTimer: null,
-    auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false, observe: null, gateReview: null };
+    auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false, damageDrawMode: false, damageDraw: null, damageJobKey: null,
+    triple: { largeJobId: null, fullJobId: null }, observe: null, gateReview: null };
   const canvas = $('#mask-canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const regionCanvas = $('#region-canvas');
@@ -31,11 +32,13 @@
     const node = $('#toast'); node.textContent = text; node.classList.remove('hidden');
     clearTimeout(state.toastTimer); state.toastTimer = setTimeout(() => node.classList.add('hidden'), 3200);
   };
+  const isObserveMode = () => Boolean(state.observe);
   const setBusy = (value) => {
     state.running = value;
     document.body.classList.toggle('busy', value);
-    $('[data-action="run-repair"]').disabled = value || !state.image || !maskHasPixels() || isObserveMode();
+    $('[data-action="run-repair"]').disabled = value || !state.image || !maskHasPixels();
     $$('[data-action="open-image"], [data-action="load-demo"], [data-action="load-competition-demo"]').forEach(button => { button.disabled = value; });
+    if (isObserveMode()) $('[data-action="run-repair"]').disabled = true;
     $$('.history-item').forEach(item => { item.disabled = value; });
   };
   const maskHasPixels = () => {
@@ -47,22 +50,6 @@
   const notifyError = (error) => toast(error?.message || String(error));
   const AUTO_HINT = '由本地 Qwen 自动识别缺损、生成掩膜并规划保守修复；结果仍需人工复核。';
   const AUTO_HINT_PRO = 'AI 会列出疑似缺损。核对选区、选择修补方案，再逐项或批量运行。';
-  const DEMO_COPY = {
-    footer: '辅助观察与方案讨论，不替代专业判断；本流程不含图像生成修复。',
-    A: {
-      step: 'AI 仅做病害/露底观察标注与文献摘录，不生成、不补绘壁画图像。',
-      risk: '红区禁绘；AI 标注非病害鉴定结论。',
-      gate: '人工确认标注与出处后，仅可导出标注层、复核记录与说明文；禁止导出修复成图。',
-      export: '仅标注层 + 复核记录 + 说明，不含修复成图。',
-    },
-    B: {
-      step: '不确定区标红 + 拒答停绘 + 人工写处置建议；不输出补绘成图。',
-      risk: '任何补纹样、凭空出画面的请求一律拒答；不确定区只标红，不填色成图。',
-      refuse: '依据不足 / 涉及补绘生成 → 已拒答，仅保留原状记录。',
-      gate: '须人工选择：采纳 / 修改 / 驳回；未选择不得进入下一档或导出终稿。',
-      export: '仅标注层 + 复核记录 + 说明，不含修复成图。',
-    },
-  };
   const isProfessional = () => Boolean($('#professional-step')?.checked);
   const currentWorkflow = () => (isProfessional() ? 'professional_step' : 'standard');
   const isRegionTool = (tool) => tool === 'uncertain' || tool === 'uncertainty' || tool === 'unrestorable';
@@ -86,80 +73,6 @@
     return node ? node.value : '';
   };
 
-  const isObserveMode = () => Boolean(state.observe);
-  const gateExport = () => (state.gateReview?.export_allowed || state.observe?.export_allowed || {});
-  const gateState = () => (state.gateReview?.gate || state.observe?.gate || {});
-  const syncGateExportButtons = () => {
-    const observe = isObserveMode();
-    const gate = gateState();
-    const exp = gateExport();
-    const blocked = Boolean(gate.blocked);
-    const canAnno = observe ? (!blocked && Boolean(exp.annotation_layer)) : true;
-    const canReview = observe ? (!blocked && Boolean(exp.review_record)) : Boolean(state.job?.selected_id);
-    const overlayBtn = $('[data-action="export-overlay"]');
-    const archiveBtn = $('[data-action="export-archive"]');
-    const confirmBtn = $('[data-action="select-candidate"]');
-    const sampleBtn = $('[data-action="load-gate-reviewed-sample"]');
-    const saveBtn = $('[data-action="save-result"]');
-    const runBtn = $('[data-action="run-repair"]');
-    if (runBtn && observe) runBtn.disabled = true;
-    if (overlayBtn) overlayBtn.disabled = observe ? !canAnno : !state.image;
-    if (archiveBtn) {
-      archiveBtn.disabled = observe ? !canReview : !state.job?.selected_id;
-      archiveBtn.textContent = observe ? '导出复核档案' : '导出修复档案';
-    }
-    if (saveBtn && observe) {
-      saveBtn.disabled = true;
-      saveBtn.title = '比赛观察模式禁止保存修复成图';
-    }
-    if (confirmBtn) {
-      if (observe) {
-        confirmBtn.disabled = false;
-        confirmBtn.textContent = '确认复核决定';
-      }
-    }
-    if (sampleBtn) sampleBtn.classList.toggle('hidden', !observe);
-    const checklist = $('#gate-checklist');
-    if (checklist) checklist.classList.toggle('hidden', !observe);
-    const abstainInput = document.querySelector('input[name="review-decision"][value="abstain"]');
-    const abstainLabel = abstainInput ? abstainInput.closest('label') : null;
-    if (abstainLabel) abstainLabel.classList.toggle('hidden', !observe);
-    const banner = $('#gate-status-banner');
-    if (banner) {
-      const text = state.gateReview?.banner || state.observe?.banner || '';
-      if (observe && text) {
-        banner.classList.remove('hidden');
-        banner.classList.toggle('blocked', blocked);
-        banner.classList.toggle('clear', !blocked);
-        banner.textContent = text;
-      } else if (!observe) {
-        banner.classList.add('hidden');
-        banner.textContent = '';
-      }
-    }
-  };
-  const readGateChecklist = () => ({
-    repairable_checked: Boolean($('#check-repairable')?.checked),
-    uncertainty_checked: Boolean($('#check-uncertainty')?.checked),
-    unrestorable_checked: Boolean($('#check-unrestorable')?.checked),
-    literature_checked: Boolean($('#check-literature')?.checked),
-  });
-  const applyGatePayload = (payload) => {
-    if (!payload) return;
-    state.gateReview = payload;
-    if (state.observe) {
-      state.observe.gate = payload.gate;
-      state.observe.export_allowed = payload.export_allowed;
-      state.observe.banner = payload.banner;
-    }
-    if (payload.checklist) {
-      if ($('#check-repairable')) $('#check-repairable').checked = Boolean(payload.checklist.repairable_checked);
-      if ($('#check-uncertainty')) $('#check-uncertainty').checked = Boolean(payload.checklist.uncertainty_checked);
-      if ($('#check-unrestorable')) $('#check-unrestorable').checked = Boolean(payload.checklist.unrestorable_checked);
-      if ($('#check-literature')) $('#check-literature').checked = Boolean(payload.checklist.literature_checked);
-    }
-    syncGateExportButtons();
-  };
   const setAutoStatus = (text) => {
     const fallback = isProfessional() ? AUTO_HINT_PRO : AUTO_HINT;
     $('#auto-status').textContent = text || fallback;
@@ -172,19 +85,9 @@
     const note = $('#professional-note');
     if (note) note.style.opacity = on ? '1' : '.72';
     const mode = $('#repair-mode')?.value || 'conservative';
-    const scene = (mode === 'enhanced' || mode === 'speculative') ? 'B' : 'A';
-    const hint = $('#demo-step-hint');
-    const banner = $('#demo-risk-banner');
-    if (hint) {
-      hint.classList.toggle('hidden', !on);
-      hint.textContent = on ? `${DEMO_COPY[scene].step} ${DEMO_COPY[scene].gate}` : '';
-    }
-    if (banner) {
-      banner.classList.toggle('hidden', !on);
-      banner.textContent = on ? DEMO_COPY[scene].risk : '';
-    }
+    const generative = Boolean($('#allow-generative-attempt')?.checked);
     const riskAck = $('#risk-ack')?.closest('label');
-    if (riskAck) riskAck.style.display = on && mode === 'enhanced' ? '' : 'none';
+    if (riskAck) riskAck.style.display = on && (mode === 'enhanced' || generative) ? '' : 'none';
     const allowEnhanced = $('#allow-enhanced')?.closest('label');
     if (allowEnhanced) allowEnhanced.style.display = on && mode === 'enhanced' ? '' : 'none';
     const maskGate = $('#mask-gate-confirmed')?.closest('label');
@@ -194,11 +97,9 @@
     if (force) force.style.display = showForce ? '' : 'none';
     const reason = $('#force-override-reason');
     if (reason) reason.classList.toggle('hidden', !(showForce && $('#force-override')?.checked));
-    // Disable run when unrestorable present
     const blocked = on && hasUnrestorableRegions();
     const runBtn = $('[data-action="run-repair"]');
-    if (runBtn && (blocked || isObserveMode())) runBtn.disabled = true;
-    syncGateExportButtons();
+    if (runBtn && blocked) runBtn.disabled = true;
   };
   const fileUrl = (value) => value || '';
 
@@ -326,28 +227,54 @@
             (event.clientY - rect.top) * canvas.height / rect.height];
   }
 
-
   const CLASS_CHIP = {
-    repairable: 'chip-repairable',
-    fillable_lacuna: 'chip-repairable',
-    uncertainty: 'chip-uncertainty',
-    uncertain: 'chip-uncertainty',
+    repairable: 'chip-repairable', fillable_lacuna: 'chip-repairable',
+    uncertainty: 'chip-uncertainty', uncertain: 'chip-uncertainty',
     unrestorable: 'chip-unrestorable',
   };
+  const gateExport = () => (state.gateReview?.export_allowed || state.observe?.export_allowed || {});
+  const gateState = () => (state.gateReview?.gate || state.observe?.gate || {});
+  function syncGateExportButtons() {
+    const observe = isObserveMode();
+    const blocked = Boolean(gateState().blocked);
+    const exp = gateExport();
+    const canAnno = observe ? (!blocked && Boolean(exp.annotation_layer)) : true;
+    const canReview = observe ? (!blocked && Boolean(exp.review_record)) : Boolean(state.job?.selected_id);
+    const overlayBtn = $('[data-action="export-overlay"]');
+    const archiveBtn = $('[data-action="export-archive"]');
+    const saveBtn = $('[data-action="save-result"]');
+    const sampleBtn = $('[data-action="load-gate-reviewed-sample"]');
+    if (overlayBtn) overlayBtn.disabled = observe ? !canAnno : !state.image;
+    if (archiveBtn) {
+      archiveBtn.disabled = observe ? !canReview : !state.job?.selected_id;
+      archiveBtn.textContent = observe ? '导出复核档案' : '导出修复档案';
+    }
+    if (saveBtn && observe) {
+      saveBtn.disabled = true;
+      saveBtn.title = '比赛观察模式禁止保存修复成图';
+    }
+    if (sampleBtn) sampleBtn.classList.toggle('hidden', !observe);
+    const checklist = $('#gate-checklist');
+    if (checklist) checklist.classList.toggle('hidden', !observe);
+    const abstain = document.querySelector('input[name="review-decision"][value="abstain"]');
+    if (abstain) abstain.closest('label')?.classList.toggle('hidden', !observe);
+    const banner = $('#gate-status-banner');
+    if (banner) {
+      const text = state.gateReview?.banner || state.observe?.banner || '';
+      banner.classList.toggle('hidden', !(observe && text));
+      banner.classList.toggle('blocked', blocked);
+      banner.classList.toggle('clear', observe && !blocked);
+      banner.textContent = observe ? text : '';
+    }
+  }
   function clearObservePack() {
     state.observe = null;
     state.gateReview = null;
-    const panel = $('#observe-preview');
-    if (panel) panel.classList.add('hidden');
+    $('#observe-preview')?.classList.add('hidden');
     ['observe-overlay', 'observe-compare', 'observe-legend'].forEach(id => {
       const img = $('#' + id); if (img) { img.removeAttribute('src'); img.classList.add('hidden'); }
     });
     const list = $('#observe-regions'); if (list) list.innerHTML = '';
-    ['check-repairable','check-uncertainty','check-unrestorable','check-literature'].forEach(id => {
-      const node = $('#' + id); if (node) node.checked = false;
-    });
-    const gbanner = $('#gate-status-banner');
-    if (gbanner) { gbanner.classList.add('hidden'); gbanner.textContent = ''; }
     syncGateExportButtons();
   }
   function renderObservePack(observe) {
@@ -359,67 +286,45 @@
     const setImg = (id, url) => {
       const img = $('#' + id);
       if (!img) return;
-      if (url) { img.src = fileUrl(url); img.classList.remove('hidden'); }
+      if (url) { img.src = url; img.classList.remove('hidden'); }
       else { img.removeAttribute('src'); img.classList.add('hidden'); }
     };
     setImg('observe-overlay', observe.overlay_risk_url);
     setImg('observe-compare', observe.compare_url);
     setImg('observe-legend', observe.legend_url);
     const note = $('#observe-export-note');
-    if (note) note.textContent = observe.export_note || DEMO_COPY.A.export;
-    const banner = $('#demo-risk-banner');
-    if (banner) {
-      banner.classList.remove('hidden');
-      banner.textContent = observe.risk_note || DEMO_COPY.A.risk;
-    }
-    const footer = $('#demo-footer');
-    if (footer) footer.textContent = DEMO_COPY.footer;
+    if (note) note.textContent = observe.export_note || '仅标注层 + 复核记录 + 说明，不含修复成图。';
     const list = $('#observe-regions');
-    if (!list) return;
     const regions = Array.isArray(observe.regions) ? observe.regions : [];
-    if (!regions.length) {
-      list.innerHTML = '<div class="empty-inline">无区域条目</div>';
-      if (observe.gate || observe.export_allowed || observe.banner) {
-        applyGatePayload({
-          gate: observe.gate,
-          export_allowed: observe.export_allowed,
-          banner: observe.banner,
-          checklist: observe.checklist,
-          candidates: observe.candidates,
-        });
-      } else {
-        syncGateExportButtons();
-      }
-      showView('results');
-      return;
+    if (list) {
+      list.innerHTML = regions.map(r => {
+        const klass = r.region_kind || r.class || r.region_class || r.class_alias || 'uncertainty';
+        const chip = CLASS_CHIP[klass] || 'chip-uncertainty';
+        const label = String(r.label || klass).replace(/</g, '&lt;');
+        const evidence = String(r.evidence || '').replace(/</g, '&lt;');
+        return `<article class="observe-region ${chip}" data-region-id="${r.id}"><header><span class="region-chip">${label}</span></header><p>${evidence}</p></article>`;
+      }).join('') || '<div class="empty-inline">无区域条目</div>';
     }
-    list.innerHTML = regions.map(r => {
-      const klass = r.region_kind || r.class || r.region_class || r.class_alias || 'uncertainty';
-      const chip = CLASS_CHIP[klass] || 'chip-uncertainty';
-      const allowed = r.repair_allowed ? '可候选保守填（须人工）' : '禁绘 / 不填色';
-      const evidence = (r.evidence || '').replace(/</g, '&lt;');
-      const label = (r.label || klass).replace(/</g, '&lt;');
-      return `<article class="observe-region ${chip}" data-region-id="${r.id}">
-        <header><span class="region-chip">${label}</span><span class="region-id">#${r.id}</span><span class="region-allow">${allowed}</span></header>
-        <p>${evidence}</p>
-      </article>`;
-    }).join('');
-    // Prefer results view so judges see overlay strip immediately
     showView('results');
-    if (observe.gate || observe.export_allowed || observe.banner) {
-      applyGatePayload({
-        gate: observe.gate,
-        export_allowed: observe.export_allowed,
-        banner: observe.banner,
-        checklist: observe.checklist,
-        candidates: observe.candidates,
-      });
-    } else {
-      syncGateExportButtons();
+    syncGateExportButtons();
+  }
+  function applyGatePayload(payload) {
+    if (!payload) return;
+    state.gateReview = payload;
+    if (state.observe) {
+      state.observe.gate = payload.gate;
+      state.observe.export_allowed = payload.export_allowed;
+      state.observe.banner = payload.banner;
     }
+    syncGateExportButtons();
   }
 
+
   function loadImage(record) {
+    clearDamageHighlight(); hideModal('damage-modal'); hideModal('triple-modal');
+    state.triple = { largeJobId: null, fullJobId: null };
+    state.damageDrawMode = false; state.damageDraw = null;
+    $('#canvas-wrap')?.classList.remove('damage-drawing');
     if (!record) {
       state.keepEmpty = true;
       state.image = state.job = state.candidate = state.proposal = null;
@@ -578,23 +483,27 @@
     if (!state.image || !maskHasPixels()) return toast('请先圈选需要修复的区域。');
     if (state.autoBusy) return toast('AI 分析仍在运行，请完成后再启动修复。');
     if (state.running) return toast('已有任务在执行，请等待完成或取消。');
+    const generative = Boolean($('#allow-generative-attempt')?.checked);
+    if (generative && !state.lastSnapshot?.models?.diffusion) {
+      return toast('AI 尝试性补全需要已安装扩散模型（models/sd-inpainting）。');
+    }
     if (isProfessional()) {
       if (!$('#mask-gate-confirmed')?.checked) return toast('专业分步：请勾选「已核对掩膜与依据」后再进入下一档。');
       if ($('#evidence-level').value === 'observation') return toast('专业分步：observation 只可记录观察，不能执行修复。');
-      if (hasUnrestorableRegions()) return toast('存在不可复原红区：禁止任何像素修复，请只导出标注图与报告。');
-      if (hasUncertainRegions()) {
+      if (!generative && hasUnrestorableRegions()) return toast('存在不可复原红区：禁止任何像素修复，请只导出标注图与报告。');
+      if (!generative && hasUncertainRegions()) {
         if ($('#evidence-level').value !== 'conservative' || $('#repair-mode').value !== 'conservative') {
           return toast('不确定红区仅可在强制放行后做保守修补。');
         }
         if (!$('#force-override')?.checked) return toast('不确定红区须勾选「专家强制放行」并填写理由。');
         if (!($('#force-override-reason')?.value || '').trim()) return toast('请填写强制放行理由。');
       }
-      if ($('#repair-mode').value === 'speculative' || $('#evidence-level').value === 'speculative') {
+      if (!generative && ($('#repair-mode').value === 'speculative' || $('#evidence-level').value === 'speculative')) {
         if ($('#repair-mode').value !== 'speculative' || $('#evidence-level').value !== 'speculative') {
           return toast('专业分步：推测须同时将修复模式与证据等级设为 speculative。');
         }
       }
-      if ($('#repair-mode').value === 'enhanced' || $('#evidence-level').value === 'enhanced') {
+      if (!generative && ($('#repair-mode').value === 'enhanced' || $('#evidence-level').value === 'enhanced')) {
         if ($('#repair-mode').value !== 'enhanced' || $('#evidence-level').value !== 'enhanced') {
           return toast('专业分步：加强修复须同时将修复模式与证据等级设为 enhanced。');
         }
@@ -606,31 +515,34 @@
         }
       }
     }
+    if (generative && !$('#risk-ack')?.checked) {
+      return toast('AI 尝试性补全须勾选风险提示：结果是推测，不是历史原貌。');
+    }
     setBusy(true);
     try {
       const rationale = ($('#rationale')?.value || '').trim() ||
-        `依据：仅处理经人工确认的当前选区，掩膜外像素保持不变。${$('#repair-mode').value === 'speculative' ? ' 推测结果仅作假设性建议，需人工复核。' : ' AI 补全仅为待复核候选，不代表历史原貌。'}`;
+        `依据：仅处理经人工确认的当前选区，掩膜外像素保持不变。${generative ? ' AI 尝试性补全结果是推测，不是历史原貌，只能按假设归档。' : ($('#repair-mode').value === 'speculative' ? ' 推测结果仅作假设性建议，需人工复核。' : ' AI 补全仅为待复核候选，不代表历史原貌。')}`;
       const mask = await invoke('saveMask', state.image.id, exportMaskBase64(), JSON.stringify(state.proposalIds || []));
       const request = { image_id: state.image.id, mask_id: mask.id,
-        backend: $('#repair-backend').value, planner: $('#planner').value,
+        backend: generative ? 'diffusion' : $('#repair-backend').value, planner: $('#planner').value,
         candidate_count: Number($('#candidate-number').value), instructions: $('#instructions').value,
-        mode: $('#repair-mode').value, registration_id: state.registration?.id || null,
+        mode: generative ? 'speculative' : $('#repair-mode').value, registration_id: state.registration?.id || null,
         structure_control: $('#controlnet').checked,
         budget: { candidates: Number($('#candidate-number').value), revisions: Number($('#revisions').value), timeout_seconds: Number($('#timeout').value), max_api_calls: 1 },
         quality_thresholds: { boundary_pair_delta: 65 },
         workflow: currentWorkflow(),
         rationale,
-        evidence_level: $('#evidence-level')?.value || null,
+        evidence_level: generative ? 'speculative' : ($('#evidence-level')?.value || null),
         expert_notes: ($('#expert-notes')?.value || '').trim(),
         mask_source: (state.proposalIds || []).length ? 'ai_candidate' : 'manual',
         allow_enhanced: Boolean($('#allow-enhanced')?.checked),
-        risk_acknowledged: Boolean($('#risk-ack')?.checked),
+        risk_acknowledged: generative ? true : Boolean($('#risk-ack')?.checked),
         mask_gate_confirmed: Boolean($('#mask-gate-confirmed')?.checked),
         has_unrestorable: hasUnrestorableRegions(),
         has_uncertain: hasUncertainRegions(),
         force_override: Boolean($('#force-override')?.checked),
         force_override_reason: ($('#force-override-reason')?.value || '').trim(),
-        contest_demo: false };
+        allow_generative_attempt: generative };
       state.job = await invoke('createJob', JSON.stringify(request));
       state.candidate = null; state.maskDirty = false;
       $('#candidate-strip').innerHTML = '<div class="empty-inline">修复候选会显示在这里</div>';
@@ -659,7 +571,12 @@
       $('[data-action="auto-restore"]').disabled = Boolean(activeJob) || state.autoBusy || !state.image;
       renderJob(state.job);
       renderHistory(snapshot.jobs || []);
-      if (state.damageItems.length) renderDamage();
+      if (!$('#triple-modal').classList.contains('hidden')) renderTriple(snapshot.jobs || []);
+      const damageJobKey = (snapshot.jobs || []).map(job => `${job.id}:${job.status}:${job.defect_proposal_id || ''}`).join('|');
+      if (state.damageItems.length && damageJobKey !== state.damageJobKey) {
+        state.damageJobKey = damageJobKey;
+        renderDamage();
+      }
       if (snapshot.aux_version !== state.auxVersion) {
         state.auxVersion = snapshot.aux_version;
         renderAux(snapshot.aux);
@@ -669,14 +586,21 @@
   }
 
   function renderModels(models) {
-    const labels = [['LaMa', models.lama], ['SAM 2', models.sam2], ['Qwen-VL', models.vision], ['云端生图', models.diffusion]];
+    ['allow-generative-attempt', 'damage-generative'].forEach(id => {
+      const node = $('#' + id);
+      if (node) {
+        node.disabled = !models.diffusion;
+        node.closest('label')?.classList.toggle('disabled', !models.diffusion);
+      }
+    });
+    const labels = [['LaMa', models.lama], ['SAM 2', models.sam2], ['Qwen-VL', models.vision], ['SD', models.diffusion]];
     $('#model-list').innerHTML = labels.map(([name, available]) => `<span class="model-tag ${available ? '' : 'off'}">${name}</span>`).join('');
     const ready = models.lama ? 'LaMa 可用' : '传统修补可用';
     $('#engine-status').innerHTML = `<i></i>${ready}`;
     const backend = $('#repair-backend'); const prior = backend.value;
     const items = [['opencv', '传统修补 · Telea / NS', true], ['lama', 'LaMa · 纹理补全', models.lama],
       ['telea', 'Telea · 细裂缝', true], ['ns', 'Navier–Stokes · 细裂缝', true],
-      ['reference', '参考证据重建', models.reference], ['diffusion', '云端生图', models.diffusion],
+      ['reference', '参考证据重建', models.reference], ['diffusion', '扩散推测补全', models.diffusion],
       ['denoise', '局部降噪', true], ['color', '周边色调匹配', true], ['deblur', '局部锐化', true],
       ['research', '壁画研究模型', models.research]];
     backend.innerHTML = items.filter(([, , available]) => available).map(([value, title]) => `<option value="${value}">${title}</option>`).join('');
@@ -687,6 +611,7 @@
 
   function renderJob(job) {
     if (!job) return;
+    if (job.mode === 'speculative') $('#archive-hypothesis').checked = true;
     const running = ACTIVE.includes(job.status);
     $('#job-status').textContent = ({ queued: '排队中', planning: '规划中', running: '修复中', evaluating: '质量检查', review: '等待复核', interrupted: '已中断', failed: '执行失败', cancelled: '已取消' })[job.status] || job.status;
     $('#job-progress').style.width = `${Math.max(0, Math.min(100, job.progress || 0))}%`;
@@ -738,7 +663,8 @@
     const selected = state.candidate?.id || job.selected_id || candidates[0].id;
     if (!state.candidate) state.candidate = candidates.find(item => item.id === selected) || candidates[0];
     const methodNames = { lama: 'LaMa 纹理补全', telea: 'Telea 快速行进', ns: 'Navier–Stokes 边缘传播',
-      reference: '已核验壁画参考', diffusion: '云端生图', denoise: '局部降噪', color: '局部色调匹配', deblur: '局部锐化', research: '研究模型' };
+      reference: '已核验壁画参考', diffusion: '扩散补全', imagine: 'Grok Imagine 全图重绘',
+      denoise: '局部降噪', color: '局部色调匹配', deblur: '局部锐化', research: '研究模型' };
     $('#candidate-strip').innerHTML = candidates.map((candidate, index) => `<button class="candidate-card ${candidate.id === state.candidate?.id ? 'active' : ''}" data-candidate="${candidate.id}"><img src="${fileUrl(candidate.file_url)}"><span>${index + 1}. ${escapeHtml(methodNames[candidate.tool] || candidate.tool)}</span></button>`).join('');
     $$('.candidate-card').forEach(item => item.addEventListener('click', () => {
       state.candidate = candidates.find(candidate => candidate.id === item.dataset.candidate); renderCandidates(job); renderComparison();
@@ -868,6 +794,7 @@
       state.candidate = null;
       state.proposalIds = [];
       renderDamage(auto.summary || '');
+      if (state.damageItems.length) showModal('damage-modal');
       $('#damage-status').textContent = state.damageItems.length ? `识别 ${state.damageItems.length} 项` : '无候选';
       setAutoStatus(auto.summary || 'AI 分析完成，请人工核对缺损清单。');
       $('#repair-mode').value = 'conservative';
@@ -922,7 +849,7 @@
     if (result.notice) toast(result.notice);
   }
 
-  const DAMAGE_LABELS = { crack: '裂缝', paint_loss: '颜料层缺失', plaster_loss: '地仗/灰泥缺失', flaking: '起甲/剥落', stain: '污渍/变色', other: '其他疑似缺损' };
+  const DAMAGE_LABELS = { crack: '裂缝', paint_loss: '颜料层缺失', plaster_loss: '地仗/灰泥缺失', flaking: '起甲/剥落', stain: '污渍/变色', other: '其他疑似缺损', manual: '手动标注缺损' };
 
   function renderCulturalContext(context) {
     const panel = $('#culture-summary');
@@ -947,39 +874,163 @@
     return '先人工确认，再选择保守修补';
   }
 
+  function bboxPercent(bbox) {
+    const values = (bbox || [0, 0, 0, 0]).map(Number);
+    const x0 = Math.min(values[0], values[2]), y0 = Math.min(values[1], values[3]);
+    const width = Math.abs(values[2] - values[0]), height = Math.abs(values[3] - values[1]);
+    return { left: `${x0 / 10}%`, top: `${y0 / 10}%`, width: `${width / 10}%`, height: `${height / 10}%` };
+  }
+
+  function showDamageHighlight(item) {
+    const node = $('#damage-highlight');
+    if (!node || !item || !Array.isArray(item.bbox) || item.bbox.length !== 4) return;
+    Object.assign(node.style, bboxPercent(item.bbox));
+    node.classList.add('visible');
+  }
+
+  function clearDamageHighlight() {
+    const node = $('#damage-highlight');
+    if (!node) return;
+    node.classList.remove('visible');
+    node.style.left = node.style.top = node.style.width = node.style.height = '';
+  }
+
+  function renderTriple(jobs = state.lastSnapshot?.jobs || []) {
+    if (!state.image) return;
+    const original = $('#triple-original');
+    if (original) original.src = `${fileUrl(state.image.file_url)}?v=${state.image.id}`;
+    const update = (jobId, imageId, statusId) => {
+      const job = jobs.find(item => item.id === jobId);
+      const image = $('#' + imageId);
+      const status = $('#' + statusId);
+      if (!job) {
+        if (status) status.textContent = '未生成';
+        if (image) { image.classList.add('hidden'); image.removeAttribute('src'); }
+        return;
+      }
+      if (ACTIVE.includes(job.status)) {
+        if (status) status.textContent = `生成中…（${job.status}）`;
+        return;
+      }
+      if (job.status === 'failed') {
+        if (status) status.textContent = `失败：${job.error || '未知错误'}`;
+        return;
+      }
+      const candidate = (job.candidates || [])[0];
+      if (candidate?.file_url && image) {
+        image.src = `${fileUrl(candidate.file_url)}?v=${candidate.id}`;
+        image.classList.remove('hidden');
+      }
+      if (status) {
+        status.textContent = job.mode === 'speculative'
+          ? '已完成 · 推测性结果（只能按假设归档）'
+          : '已完成';
+      }
+    };
+    update(state.triple.largeJobId, 'triple-large', 'triple-large-status');
+    update(state.triple.fullJobId, 'triple-full', 'triple-full-status');
+    const canDiffusion = Boolean(state.lastSnapshot?.models?.diffusion);
+    const canCloud = Boolean(state.lastSnapshot?.imagine?.configured);
+    const busy = state.running || state.autoBusy;
+    const largeButton = $('[data-action="generate-large-panel"]');
+    const fullButton = $('[data-action="generate-full-panel"]');
+    if (largeButton) {
+      largeButton.disabled = !canDiffusion || busy;
+      largeButton.title = canDiffusion ? '' : '需要安装扩散模型 models/sd-inpainting';
+    }
+    if (fullButton) {
+      fullButton.disabled = !(canDiffusion || canCloud) || busy;
+      fullButton.textContent = canCloud ? '生成全图（Grok）' : '生成全图';
+      fullButton.title = canCloud ? '使用完整原图调用 Grok Imagine 重绘' : '使用本地扩散全图生成';
+    }
+  }
+
+  function openTripleView() {
+    if (!state.image) return toast('请先打开一幅壁画。');
+    renderTriple();
+    showModal('triple-modal');
+  }
+
+  async function generateTriple(kind) {
+    if (!state.image) return toast('请先打开一幅壁画。');
+    if (kind === 'large' && !state.lastSnapshot?.models?.diffusion) {
+      return toast('大面积修补需要已安装本地扩散模型（models/sd-inpainting）。');
+    }
+    if (kind === 'full' && !state.lastSnapshot?.models?.diffusion && !state.lastSnapshot?.imagine?.configured) {
+      return toast('全图生成需要本地扩散模型或已配置 Grok Imagine。');
+    }
+    if (state.running || state.autoBusy) return toast('当前有任务在运行，请稍候。');
+    const button = $(`[data-action="generate-${kind}-panel"]`);
+    if (button) button.disabled = true;
+    try {
+      const job = await invoke(kind === 'large' ? 'generateLargeRepair' : 'generateFullImage', state.image.id);
+      state.triple[kind === 'large' ? 'largeJobId' : 'fullJobId'] = job.id;
+      renderTriple();
+      toast(kind === 'large'
+        ? '已启动 AI 大面积修补；生成结果是推测，不是历史原貌。'
+        : '已启动全图 AI 生成；结果是推测，不是历史原貌。');
+      await refresh();
+    } catch (error) {
+      notifyError(error);
+      renderTriple();
+    }
+  }
+
+  function openDamageModal() {
+    if (!state.image) return toast('请先打开一幅壁画。');
+    if (state.damageDrawMode) {
+      state.damageDrawMode = false; state.damageDraw = null;
+      $('#canvas-wrap')?.classList.remove('damage-drawing');
+      clearDamageHighlight();
+    }
+    renderDamage();
+    showModal('damage-modal');
+  }
+
   function renderDamage(limitations = '') {
     const list = $('#damage-list');
-    if (!state.image || !state.damageItems.length) {
-      list.innerHTML = '<div class="empty-inline">分析后逐项显示缺损和修复建议</div>';
-      $('#damage-note').textContent = 'AI 识别、类别与掩膜提取都只是候选，需人工检查；不能替代病害鉴定。' + (limitations ? ' ' + limitations : '');
+    if (!list) return;
+    const count = state.damageItems.length;
+    const status = $('#damage-status');
+    if (status) status.textContent = count ? `共 ${count} 项` : '待分析';
+    const badge = $('#damage-count');
+    if (badge) badge.textContent = String(count);
+    const runAll = $('[data-action="run-all-defects"]');
+    if (!state.image || !count) {
+      list.innerHTML = '<div class="empty-inline">点“AI 分析缺损”生成清单，或点“手动添加缺损区域”框选。</div>';
+      $('#damage-note').textContent = limitations || '所有缺损都可以尝试修复；结果不满意可以重跑。';
       $('#damage-image').classList.add('hidden'); $('#damage-empty').classList.remove('hidden');
-      $('[data-action="run-all-defects"]').disabled = true;
+      if (runAll) runAll.disabled = true;
       return;
     }
     const jobs = state.lastSnapshot?.jobs || [];
+    const busy = state.running || state.autoBusy;
+    const generative = Boolean($('#damage-generative')?.checked);
     list.innerHTML = state.damageItems.map((item, index) => {
       const [x0, y0, x1, y1] = item.bbox || [0, 0, 0, 0];
       const extent = Math.max(0, (x1 - x0) * (y1 - y0)) / 100;
       const job = jobs.find(record => record.defect_proposal_id === item.proposal_id);
-      const status = job ? `任务${['review', 'completed'].includes(job.status) ? '已完成' : job.status === 'failed' ? '失败' : '进行中'}` : '';
+      const statusText = job ? `任务${['review', 'completed'].includes(job.status) ? '已完成' : job.status === 'failed' ? '失败' : '进行中'}` : '';
       const method = item.recommendation?.method || damageRecommendation(item);
       const selectedMethod = item.selectedMethod || 'recommended';
-      const blocked = !item.proposal_id || !item.repair_allowed || item.region_class !== 'repairable';
       const alreadyQueued = job && ACTIVE.includes(job.status);
       const busy = state.running || state.autoBusy;
-      const blocker = item.risk_notice || (blocked ? '请先人工复核风险分类；当前不能一键修复。' : '');
+      const disabled = alreadyQueued || busy;
+      const hint = item.risk_notice
+        ? `风险提示（不会阻止运行）：${item.risk_notice}`
+        : (!item.proposal_id ? '暂无可用掩膜，运行时会按框自动生成矩形掩膜。' : '');
       return `<div class="damage-item ${item === state.selectedDamage ? 'selected' : ''}" data-damage-row="${index}">` +
         `<div class="damage-item-main"><button class="damage-select" data-damage="${index}">${String(index + 1).padStart(2, '0')} ${escapeHtml(DAMAGE_LABELS[item.type] || '其他疑似缺损')}</button>` +
-        `<small>${escapeHtml(item.size || 'uncertain')} · 框选约 ${extent.toFixed(2)}% · 视觉置信 ${Math.round((item.confidence || 0) * 100)}%</small>` +
-        `<small>AI 建议：${escapeHtml(method)}</small><label class="damage-method">修补方案 <select data-method-defect="${index}" ${blocked || alreadyQueued || busy ? 'disabled' : ''}>` +
-        `<option value="recommended" ${selectedMethod === 'recommended' ? 'selected' : ''}>采用 AI 建议</option>` +
-        `<option value="lama" ${selectedMethod === 'lama' ? 'selected' : ''} ${state.lastSnapshot?.models?.lama ? '' : 'disabled'}>LaMa AI 纹理补全${state.lastSnapshot?.models?.lama ? '' : '（未安装）'}</option>` +
+        `<small>${escapeHtml(item.size || 'manual')} · 框选约 ${extent.toFixed(2)}% · 置信 ${Math.round((item.confidence || 0) * 100)}%</small>` +
+        `<small>建议：${escapeHtml(method)}</small><label class="damage-method">修补方案 <select data-method-defect="${index}" ${disabled || generative ? 'disabled' : ''}>` +
+        `<option value="recommended" ${selectedMethod === 'recommended' ? 'selected' : ''}>采用建议</option>` +
+        `<option value="lama" ${selectedMethod === 'lama' ? 'selected' : ''} ${state.lastSnapshot?.models?.lama ? '' : 'disabled'}>LaMa AI 纹理补全${state.lastSnapshot?.models?.lama ? '' : '（未安装，将回退 Telea）'}</option>` +
         `<option value="telea" ${selectedMethod === 'telea' ? 'selected' : ''}>Telea 局部纹理传播</option>` +
         `<option value="ns" ${selectedMethod === 'ns' ? 'selected' : ''}>Navier–Stokes 细线修补</option>` +
         `<option value="color" ${selectedMethod === 'color' ? 'selected' : ''}>局部色调匹配</option></select></label>` +
-        `${blocker ? `<small>${escapeHtml(blocker)}</small>` : ''}${status ? `<small>${status}</small>` : ''}</div>` +
-        `<div class="damage-item-actions"><label class="damage-confirm"><input type="checkbox" data-confirm-defect="${index}" ${item.confirmed ? 'checked' : ''} ${blocked || alreadyQueued || busy ? 'disabled' : ''}>确认</label>` +
-        `<button class="button" data-run-defect="${index}" ${blocked || alreadyQueued || busy ? 'disabled' : ''}>运行修复</button></div></div>`;
+        `${hint ? `<small>${escapeHtml(hint)}</small>` : ''}${statusText ? `<small>${statusText}</small>` : ''}</div>` +
+        `<div class="damage-item-actions"><label class="damage-confirm"><input type="checkbox" data-confirm-defect="${index}" ${item.confirmed ? 'checked' : ''} ${disabled ? 'disabled' : ''}>确认</label>` +
+        `<button class="button" data-run-defect="${index}" ${disabled ? 'disabled' : ''}>运行修复</button></div></div>`;
     }).join('');
     $$('[data-damage]').forEach(button => button.addEventListener('click', () => selectDamage(Number(button.dataset.damage))));
     $$('[data-confirm-defect]').forEach(input => input.addEventListener('change', () => {
@@ -990,26 +1041,62 @@
       state.damageItems[Number(select.dataset.methodDefect)].selectedMethod = select.value;
     }));
     $$('[data-run-defect]').forEach(button => button.addEventListener('click', () => runDefectRepairs([Number(button.dataset.runDefect)]).catch(notifyError)));
-    $('#damage-note').textContent = (limitations || '') || 'AI 识别、类别与掩膜提取都只是候选，需人工检查；不能替代病害鉴定。';
-    if (state.selectedDamage === null) selectDamage(0);
-    $('[data-action="run-all-defects"]').disabled = state.running || state.autoBusy || !state.damageItems.some(item => item.confirmed && item.proposal_id && item.repair_allowed && item.region_class === 'repairable' && !jobs.some(job => job.defect_proposal_id === item.proposal_id && ACTIVE.includes(job.status)));
+    const generativeToggle = $('#damage-generative');
+    if (generativeToggle) generativeToggle.onchange = () => renderDamage(limitations);
+    const first = state.damageItems[0];
+    $('#damage-note').textContent = generative
+      ? 'AI 生成式补全（实验）：每项会用扩散模型按框直接生成，结果是推测，只能按假设归档；可能修坏，可重跑。'
+      : `${limitations || ''} 首项建议：${damageRecommendation(first)}。所有项都可以尝试修复，结果不满意可重跑。`;
+    if (runAll) {
+      runAll.disabled = busy || !state.damageItems.some(item => !jobs.some(job => job.defect_proposal_id === item.proposal_id && ACTIVE.includes(job.status)));
+    }
   }
 
   async function runDefectRepairs(indexes) {
+    if (!state.image) return toast('请先打开一幅壁画。');
     if (state.running || state.autoBusy) return toast('请等待当前分析或修复任务完成。');
-    const selected = indexes.map(index => state.damageItems[index]).filter(item => item && item.confirmed && item.proposal_id && item.repair_allowed && item.region_class === 'repairable');
-    if (!selected.length) return toast('请先确认至少一个可保守修复的缺损项。');
+    const generativeAttempt = Boolean($('#damage-generative')?.checked);
+    if (generativeAttempt && !state.lastSnapshot?.models?.diffusion) {
+      return toast('AI 生成式补全需要已安装扩散模型（models/sd-inpainting）。');
+    }
+    const selected = indexes.map(index => state.damageItems[index]).filter(Boolean);
+    if (!selected.length) return toast('没有可运行的缺损项。');
+    const proposalIds = [];
+    const methods = {};
+    const failed = [];
+    for (const item of selected) {
+      if (!item.proposal_id) {
+        try {
+          const made = await invoke('addManualDefect', state.image.id, JSON.stringify({
+            bbox: item.bbox, type: item.type, size: item.size,
+          }));
+          item.proposal_id = made.defect.proposal_id;
+          item.region_class = 'fillable_lacuna';
+          item.repair_allowed = true;
+          item.confirmed = true;
+        } catch (error) {
+          failed.push({ item, error });
+          continue;
+        }
+      }
+      proposalIds.push(item.proposal_id);
+      if (item.selectedMethod && item.selectedMethod !== 'recommended') methods[item.proposal_id] = item.selectedMethod;
+    }
+    if (!proposalIds.length) {
+      notifyError(failed[0]?.error || new Error('没有可运行的缺损项。'));
+      return;
+    }
+    if (failed.length) toast(`${failed.length} 项无法自动生成掩膜，已跳过；其余继续运行。`);
     const result = await invoke('runDefectRepairs', JSON.stringify({
-      image_id: state.image.id, proposal_ids: selected.map(item => item.proposal_id), confirmed: true,
-      methods: Object.fromEntries(selected.filter(item => item.selectedMethod && item.selectedMethod !== 'recommended')
-        .map(item => [item.proposal_id, item.selectedMethod])),
+      image_id: state.image.id, proposal_ids: proposalIds, confirmed: true, methods,
+      generative_attempt: generativeAttempt,
     }));
     const count = result.jobs?.length || 0;
     if (!count) {
-      const reason = result.skipped?.[0]?.reason || '当前没有可运行的缺损项。';
-      toast(reason);
+      toast(result.skipped?.[0]?.reason || '当前没有可运行的缺损项。');
       return;
     }
+    hideModal('damage-modal');
     const skipped = result.skipped?.length ? `；跳过 ${result.skipped.length} 项：${result.skipped[0].reason}` : '';
     toast(`已启动 ${count} 个修复任务${skipped}。`);
     await refresh();
@@ -1020,10 +1107,11 @@
     const item = state.damageItems[index];
     if (!item || !state.image) return;
     state.selectedDamage = item;
-    $$('.damage-item').forEach((button, position) => button.classList.toggle('selected', position === index));
-    const [x0, y0, x1, y1] = item.bbox || [0, 0, 0, 0];
-    const fraction = Math.max(0, (x1 - x0) * (y1 - y0)) / 100;
-    $('#damage-note').textContent = `疑似${DAMAGE_LABELS[item.type] || '缺损'}，AI 估计 ${item.size}，框选约 ${fraction.toFixed(2)}% 图像面积；建议：${damageRecommendation(item)}。视觉置信 ${Math.round((item.confidence || 0) * 100)}% 不是病害概率。依据：${item.evidence || '无文字依据'}。请先检查红框是否落在真实损伤上。`;
+    showDamageHighlight(item);
+    renderDamage();
+    hideModal('damage-modal');
+    showPage('workbench'); showView('edit');
+    toast(`已框出第 ${index + 1} 项；再次打开“缺损清单”可继续操作。`);
     try {
       const preview = await invoke('damagePreview', state.image.id, JSON.stringify(item));
       if (preview?.file_url) {
@@ -1031,6 +1119,61 @@
         $('#damage-image').classList.remove('hidden'); $('#damage-empty').classList.add('hidden');
       }
     } catch (error) { console.warn(error); }
+  }
+
+  function beginManualDamage() {
+    if (!state.image) return toast('请先打开一幅壁画。');
+    if (state.running || state.autoBusy) return toast('请等待当前修复或 AI 分析完成。');
+    hideModal('damage-modal');
+    state.damageDrawMode = true;
+    state.damageDraw = null;
+    showPage('workbench'); showView('edit');
+    $('#canvas-wrap').classList.add('damage-drawing');
+    toast('在图像上拖动框选缺损区域；按 Esc 取消。');
+  }
+
+  function updateDamageDraft() {
+    const drawing = state.damageDraw;
+    if (!drawing || !canvas.width || !canvas.height) return;
+    const x0 = Math.min(drawing.start[0], drawing.end[0]) / canvas.width * 1000;
+    const y0 = Math.min(drawing.start[1], drawing.end[1]) / canvas.height * 1000;
+    const x1 = Math.max(drawing.start[0], drawing.end[0]) / canvas.width * 1000;
+    const y1 = Math.max(drawing.start[1], drawing.end[1]) / canvas.height * 1000;
+    const node = $('#damage-highlight');
+    if (!node) return;
+    Object.assign(node.style, bboxPercent([x0, y0, x1, y1]));
+    node.classList.add('visible');
+  }
+
+  async function finishDamageDraw() {
+    const drawing = state.damageDraw;
+    if (!drawing || !state.image) return;
+    state.damageDraw = null;
+    state.damageDrawMode = false;
+    $('#canvas-wrap').classList.remove('damage-drawing');
+    const x0 = Math.min(drawing.start[0], drawing.end[0]) / canvas.width * 1000;
+    const y0 = Math.min(drawing.start[1], drawing.end[1]) / canvas.height * 1000;
+    const x1 = Math.max(drawing.start[0], drawing.end[0]) / canvas.width * 1000;
+    const y1 = Math.max(drawing.start[1], drawing.end[1]) / canvas.height * 1000;
+    if (x1 - x0 < 4 || y1 - y0 < 4) {
+      clearDamageHighlight();
+      toast('框选太小，请重新拖动一个更大的区域。');
+      return;
+    }
+    const bbox = [x0, y0, x1, y1].map(value => Math.round(value));
+    try {
+      const made = await invoke('addManualDefect', state.image.id, JSON.stringify({ bbox, type: 'manual', size: 'manual' }));
+      const item = made.defect;
+      state.damageItems.push(item);
+      state.selectedDamage = item;
+      showDamageHighlight(item);
+      renderDamage();
+      showModal('damage-modal');
+      toast('已添加手动缺损；点“运行修复”或“运行全部”即可开始。');
+    } catch (error) {
+      notifyError(error);
+      clearDamageHighlight();
+    }
   }
 
   function renderReferences(records) {
@@ -1079,6 +1222,13 @@
           if (state.running || state.autoBusy) return toast('任务或 AI 分析进行中，完成后再新建任务。');
           await loadImage(null); state.image = null; $('#empty-state').classList.remove('hidden'); imageWrap.classList.add('hidden'); break;
         case 'open-image': await openImage(); break;
+        case 'open-damage-list': openDamageModal(); break;
+        case 'close-damage-list': hideModal('damage-modal'); break;
+        case 'add-manual-defect': beginManualDamage(); break;
+        case 'open-triple-view': openTripleView(); break;
+        case 'close-triple-view': hideModal('triple-modal'); break;
+        case 'generate-large-panel': await generateTriple('large'); break;
+        case 'generate-full-panel': await generateTriple('full'); break;
         case 'load-demo': { if (state.running || state.autoBusy) return toast('任务或 AI 分析进行中，完成后再载入图像。'); const record = await invoke('loadDemo'); await loadImage(record); break; }
         case 'load-competition-demo': {
           if (state.running || state.autoBusy) return toast('任务或 AI 分析进行中，完成后再载入图像。');
@@ -1090,25 +1240,20 @@
             pack.observe.banner = pack.banner || pack.observe.banner;
           }
           renderObservePack(pack?.observe || null);
-          if (pack?.gate_review || pack?.gate) {
+          if (pack?.gate || pack?.gate_review) {
             applyGatePayload({
-              gate: pack.gate,
-              export_allowed: pack.export_allowed,
-              banner: pack.banner,
-              gate_review: pack.gate_review,
-              candidates: pack.gate_review?.candidates,
+              gate: pack.gate, export_allowed: pack.export_allowed, banner: pack.banner,
+              gate_review: pack.gate_review, candidates: pack.gate_review?.candidates,
             });
-            state.gateReview = {
-              ...(state.gateReview || {}),
-              gate: pack.gate,
-              export_allowed: pack.export_allowed,
-              banner: pack.banner,
-              gate_review: pack.gate_review,
-              candidates: pack.gate_review?.candidates,
-            };
-            syncGateExportButtons();
           }
           toast('已载入比赛观察包：原图 + 三色风险标注；门禁待人工复核（默认阻断导出）。');
+          break;
+        }
+        case 'load-gate-reviewed-sample': {
+          if (!isObserveMode() || !state.image) return toast('请先载入比赛观察包。');
+          const payload = await invoke('loadGateSample', 'sample-from-shibi-reviewed');
+          applyGatePayload(payload);
+          toast('演示样例：已复核可导出（标注层+复核记录；restored_image=false）。');
           break;
         }
         case 'undo': {
@@ -1154,31 +1299,13 @@
           }
           break;
         }
-        case 'run-all-defects':
-          if (isObserveMode()) return toast('比赛观察模式不生成修复成图；请复核标注后导出标注层或复核档案。');
-          await runDefectRepairs(state.damageItems.map((_, index) => index)); break;
+        case 'run-all-defects': await runDefectRepairs(state.damageItems.map((_, index) => index)); break;
         case 'cancel-job': { const identifier = state.activeJobId || state.job?.id; if (identifier) { await invoke('cancelJob', identifier); } await refresh(); break; }
         case 'resume-job': if (state.job) await invoke('resumeJob', state.job.id); await refresh(); break;
         case 'select-candidate': {
-          if (isObserveMode() && state.image) {
-            const decision = selectedDecision();
-            if (!decision) return toast('请选择：采纳 / 修改后采纳 / 驳回 / 拒答。');
-            const checklist = readGateChecklist();
-            const payload = await invoke('applyGateReview', state.image.id, JSON.stringify({
-              decision,
-              note: $('#review-note').value,
-              checklist,
-              confirm: true,
-            }));
-            applyGatePayload(payload);
-            toast(payload?.gate?.blocked
-              ? ('门禁仍阻断：' + ((payload.gate.block_reasons || []).slice(0, 2).join('；') || '请检查勾选与决策'))
-              : '复核已确认，可导出标注层 + 复核记录（禁止修复成图）。');
-            break;
-          }
           if (state.job && state.candidate) {
           const decision = selectedDecision();
-          if (isProfessional() && !decision) return toast(DEMO_COPY.B.gate);
+          if (isProfessional() && !decision) return toast('专业分步：请先选择采纳 / 修改后采纳 / 驳回。');
           const notePayload = JSON.stringify({
             note: $('#review-note').value,
             archive_as_hypothesis: Boolean($('#archive-hypothesis')?.checked),
@@ -1198,13 +1325,9 @@
           if (isObserveMode()) {
             const gate = gateState();
             const exp = gateExport();
-            if (gate.blocked || !exp.annotation_layer) {
-              return toast('门禁未放行：不能导出标注层。请先完成三色核对与复核决定。');
-            }
-            if (exp.restored_image) return toast(DEMO_COPY.B.refuse);
-            try {
-              await invoke('exportObserveAnnotation', state.image.id);
-            } catch (error) { notifyError(error); }
+            if (gate.blocked || !exp.annotation_layer) return toast('门禁未放行：不能导出标注层。请先完成三色核对与复核决定。');
+            if (exp.restored_image) return toast('比赛观察模式禁止保存修复成图');
+            try { await invoke('exportObserveAnnotation', state.image.id); } catch (error) { notifyError(error); }
             break;
           }
           const out = document.createElement('canvas');
@@ -1225,7 +1348,7 @@
           break;
         }
         case 'save-result':
-          if (isObserveMode()) return toast(DEMO_COPY.B.refuse);
+          if (isObserveMode()) return toast('比赛观察模式禁止保存修复成图');
           if (state.candidate) {
           try { await invoke('saveResult', state.candidate.id); } catch (error) { notifyError(error); }
         } break;
@@ -1233,36 +1356,12 @@
           if (isObserveMode() && state.image) {
             const gate = gateState();
             const exp = gateExport();
-            if (gate.blocked || !exp.review_record) {
-              return toast('门禁未放行：不能导出复核档案。');
-            }
-            if (exp.restored_image) return toast(DEMO_COPY.B.refuse);
+            if (gate.blocked || !exp.review_record) return toast('门禁未放行：不能导出复核档案。');
+            if (exp.restored_image) return toast('比赛观察模式禁止保存修复成图');
             try { await invoke('exportObserveReview', state.image.id); } catch (error) { notifyError(error); }
             break;
           }
           if (state.job) await invoke('exportArchive', state.job.id);
-          break;
-        }
-        case 'load-gate-reviewed-sample': {
-          if (!isObserveMode() || !state.image) return toast('请先载入比赛观察包。');
-          try {
-            const payload = await invoke('loadGateSample', 'sample-from-shibi-reviewed');
-            // Sample already has decisions; mark checklist checked for demo click-through.
-            if ($('#check-repairable')) $('#check-repairable').checked = true;
-            if ($('#check-uncertainty')) $('#check-uncertainty').checked = true;
-            if ($('#check-unrestorable')) $('#check-unrestorable').checked = true;
-            if ($('#check-literature')) $('#check-literature').checked = true;
-            applyGatePayload({
-              ...payload,
-              checklist: {
-                repairable_checked: true,
-                uncertainty_checked: true,
-                unrestorable_checked: true,
-                literature_checked: true,
-              },
-            });
-            toast('演示样例：已复核可导出（标注层+复核记录；restored_image=false）。');
-          } catch (error) { notifyError(error); }
           break;
         }
         case 'open-settings': openSettings(); break;
@@ -1295,38 +1394,22 @@
     } catch (error) { notifyError(error); }
   }
 
-  const IMAGINE_DEFAULTS = {
-    openai_json: { base: 'https://api.x.ai/v1', model: 'grok-imagine-image-2.0' },
-    openai_multipart: { base: 'https://api.openai.com/v1', model: 'gpt-image-1' },
-  };
-  function applyImagineDefaults(force) {
-    const provider = $('#imagine-provider')?.value || 'openai_json';
-    const defaults = IMAGINE_DEFAULTS[provider] || IMAGINE_DEFAULTS.openai_json;
-    const base = $('#imagine-base');
-    const model = $('#imagine-model');
-    const known = Object.values(IMAGINE_DEFAULTS);
-    if (base && (force || !base.value.trim() || known.some(item => item.base === base.value.trim()))) base.value = defaults.base;
-    if (model && (force || !model.value.trim() || known.some(item => item.model === model.value.trim()))) model.value = defaults.model;
-  }
   function openSettings() {
     $('#api-kind').value = state.lastSnapshot?.api?.kind || 'responses';
     $('#api-base').value = state.lastSnapshot?.api?.base_url || 'https://api.openai.com/v1';
     $('#api-model').value = state.lastSnapshot?.api?.model || '';
     $('#api-key').value = '';
     $('#api-json').checked = state.lastSnapshot?.api?.json_mode !== false;
-    const imagine = state.lastSnapshot?.imagine || {};
-    if ($('#imagine-provider')) $('#imagine-provider').value = imagine.provider || 'openai_json';
-    if ($('#imagine-base')) $('#imagine-base').value = imagine.base_url || IMAGINE_DEFAULTS.openai_json.base;
-    if ($('#imagine-model')) $('#imagine-model').value = imagine.model || IMAGINE_DEFAULTS.openai_json.model;
-    if ($('#imagine-key')) $('#imagine-key').value = '';
+    $('#imagine-base').value = state.lastSnapshot?.imagine?.base_url || 'https://api.x.ai/v1';
+    $('#imagine-model').value = state.lastSnapshot?.imagine?.model || 'grok-imagine-image-2.0';
+    $('#imagine-key').value = '';
     $('#api-error').textContent = '';
     showModal('settings-modal');
   }
 
   async function saveSettings() {
     const form = { kind: $('#api-kind').value, base_url: $('#api-base').value.trim(), model: $('#api-model').value.trim(), key: $('#api-key').value, json_mode: $('#api-json').checked,
-      imagine: { provider: $('#imagine-provider')?.value || 'openai_json', base_url: $('#imagine-base')?.value.trim() || '',
-        model: $('#imagine-model')?.value.trim() || '', key: $('#imagine-key')?.value || '' } };
+      imagine: { provider: 'openai_json', base_url: $('#imagine-base').value.trim(), model: $('#imagine-model').value.trim(), key: $('#imagine-key').value } };
     try { await invoke('saveApiSettings', JSON.stringify(form)); hideModal('settings-modal'); toast('API 配置已保存。'); await refresh(); }
     catch (error) { $('#api-error').textContent = error.message; }
   }
@@ -1362,9 +1445,17 @@
   $('#repair-mode')?.addEventListener('change', syncProfessionalUi);
   $('#evidence-level')?.addEventListener('change', syncProfessionalUi);
   $('#force-override')?.addEventListener('change', syncProfessionalUi);
+  $('#allow-generative-attempt')?.addEventListener('change', event => {
+    if (event.target.checked) {
+      $('#repair-mode').value = 'speculative';
+      $('#evidence-level').value = 'speculative';
+      $('#risk-ack').checked = true;
+      toast('已启用 AI 尝试性补全：将用扩散模型生成，结果须按假设归档。');
+    }
+    syncProfessionalUi();
+  });
   syncProfessionalUi();
   $('#professional-step').checked = true;
-  $('#imagine-provider')?.addEventListener('change', () => applyImagineDefaults(false));
   $('#planner').addEventListener('change', event => {
     $('#planner-note').textContent = event.target.value === 'api' ? '会向已配置服务发送图像缩略图、掩膜预览和备注。' : event.target.value === 'local' ? '本地 Qwen3-VL 分析图像，不发送数据。' : '本地规则不会发送图像。';
   });
@@ -1376,7 +1467,14 @@
 
   canvas.addEventListener('pointerdown', event => {
     if (!state.image || !image.naturalWidth || state.running) return;
-    const point = pointAt(event); canvas.setPointerCapture(event.pointerId);
+    const point = pointAt(event);
+    try { canvas.setPointerCapture(event.pointerId); } catch (error) { /* synthetic/edge pointer */ }
+    if (state.damageDrawMode) {
+      event.preventDefault();
+      state.damageDraw = { start: point, end: point };
+      updateDamageDraft();
+      return;
+    }
     if (state.tool === 'sam-point') {
       state.promptPoints.push(point); state.promptLabels.push(event.button === 2 ? 0 : 1); toast('已记录分割提示点。'); return;
     }
@@ -1387,6 +1485,11 @@
     paintStroke(state.currentStroke); state.maskDirty = true; setBusy(state.running);
   });
   canvas.addEventListener('pointermove', event => {
+    if (state.damageDraw) {
+      state.damageDraw.end = pointAt(event);
+      updateDamageDraft();
+      return;
+    }
     if (state.currentStroke) {
       state.currentStroke.points.push(pointAt(event));
       redrawMask();
@@ -1394,6 +1497,10 @@
     if (state.tool === 'sam-box' && state.promptBox && event.buttons) state.promptBox.splice(2, 2, ...pointAt(event));
   });
   canvas.addEventListener('pointerup', () => {
+    if (state.damageDraw) {
+      finishDamageDraw().catch(notifyError);
+      return;
+    }
     if (!state.currentStroke) return;
     if (isRegionTool(state.currentStroke.tool)) {
       state.regionStrokes.push(state.currentStroke); state.strokeOrder.push('region');
@@ -1413,7 +1520,16 @@
     if (event.key.toLowerCase() === 'b') setTool('brush');
     if (event.key.toLowerCase() === 'e') setTool('eraser');
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); handleAction('undo'); }
-    if (event.key === 'Escape') { ['settings-modal', 'reference-modal', 'verify-modal'].forEach(hideModal); }
+    if (event.key === 'Escape') {
+      if (state.damageDrawMode) {
+        state.damageDrawMode = false; state.damageDraw = null;
+        $('#canvas-wrap').classList.remove('damage-drawing');
+        clearDamageHighlight();
+        toast('已取消手动框选。');
+        return;
+      }
+      ['settings-modal', 'reference-modal', 'verify-modal', 'damage-modal'].forEach(hideModal);
+    }
   });
 
   new QWebChannel(qt.webChannelTransport, channel => {

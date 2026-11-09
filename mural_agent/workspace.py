@@ -26,11 +26,8 @@ def add_mask(store, image_record, payload, proposal_ids=None, mask_source='manua
              region_class='fillable_lacuna', risk_regions=None, expert_force_override=False,
              force_override_reason=''):
     from .professional import normalize_mask_source
-    try:
-        from .risk_regions import normalize_region_class
-        klass = normalize_region_class(region_class)
-    except Exception:
-        klass = (region_class or 'fillable_lacuna')
+    from .risk_regions import normalize_region_class
+    klass = normalize_region_class(region_class)
     mask = decode_image(payload, mask=True)
     if mask.size != (image_record['width'], image_record['height']):
         raise ValueError('掩膜必须与工作图尺寸一致。')
@@ -60,11 +57,12 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
                evidence_level=None, expert_notes='', mask_source=None, allow_enhanced=False,
                risk_acknowledged=False, mask_gate_confirmed=False, has_unrestorable=False,
                has_uncertain=False, force_override=False, force_override_reason='',
-               contest_demo=None, expert_force_override=False):
+               allow_generative_attempt=False, full_generation=False):
     from .planner import Budget
     from .imaging import mask_array
     from .professional import (WORKFLOW_PROFESSIONAL, normalize_workflow, normalize_mask_source,
-                               validate_professional_create)
+                               validate_professional_create, enforce_mode_and_risk)
+    from .risk_regions import derive_risk_flags
     available = engine.tools.availability()
     workflow = normalize_workflow(workflow)
     if backend == 'lama' and not engine.lama.available():
@@ -77,7 +75,7 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
         raise ValueError('掩膜不属于当前图像。')
     if planner == 'auto' and not (isinstance(auto, dict) and auto.get('steps')):
         raise ValueError('AI 自动任务缺少规划信息。')
-    if backend not in {'opencv', 'telea', 'ns', 'lama', 'reference', 'diffusion', 'denoise', 'color', 'deblur', 'research'} or planner not in {'api', 'rules', 'local', 'auto'} or not 1 <= count <= 3:
+    if backend not in {'opencv', 'telea', 'ns', 'lama', 'reference', 'diffusion', 'imagine', 'denoise', 'color', 'deblur', 'research'} or planner not in {'api', 'rules', 'local', 'auto'} or not 1 <= count <= 3:
         raise ValueError('不支持的修复配置。')
     if not available.get(backend):
         raise ValueError('所选工具尚未配置，请在模型与环境中查看安装状态。')
@@ -85,12 +83,16 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
         raise ValueError('不支持的修复模式。')
     if (backend == 'reference') != (mode == 'evidence'):
         raise ValueError('证据辅助模式必须使用核验参考重建工具。')
-    if mode == 'speculative' and backend != 'diffusion':
-        raise ValueError('推测模式必须使用云端生图。')
+    if mode == 'speculative' and backend not in {'diffusion', 'imagine'}:
+        raise ValueError('推测模式必须使用扩散补全或云端全图重绘。')
     if backend == 'diffusion' and mode not in {'speculative', 'enhanced'}:
-        raise ValueError('云端生图仅允许在推测或加强修复模式下使用。')
+        raise ValueError('扩散补全仅允许在推测或加强修复模式下使用。')
+    if full_generation and (backend not in {'diffusion', 'imagine'} or mode != 'speculative'):
+        raise ValueError('全图 AI 生成必须使用 speculative + diffusion/imagine。')
+    if backend == 'imagine' and mode != 'speculative':
+        raise ValueError('云端全图重绘必须在 speculative 模式下执行。')
     if structure_control and (backend != 'diffusion' or not available['controlnet']):
-        raise ValueError('结构控制需要已安装的 ControlNet；云端生图不使用本机 ControlNet。')
+        raise ValueError('结构控制需要已安装的 ControlNet 和扩散工具。')
     if registration_id:
         registration = store.get('registration', registration_id)
         if not registration or registration['image_id'] != image_record['id'] or not registration.get('approved'):
@@ -102,15 +104,26 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
         editable = mask_array(store.folder(mask_record['id'])/'mask.png')
         if ((editable > 0) & (approved == 0)).any():
             raise ValueError('修复区域超出已核验参考范围。')
+    # Risk flags are always derived from the frozen mask record; the has_* UI
+    # booleans are intentionally ignored so a stale/forged client cannot bypass
+    # the uncertain/unrestorable gates.
+    risk_flags = derive_risk_flags(mask_record)
+    if mask_record.get('expert_force_override') and not force_override:
+        force_override = True
+        force_override_reason = force_override_reason or mask_record.get('force_override_reason') or ''
+    enforce_mode_and_risk(
+        mode=mode,
+        mask_record=mask_record,
+        mask_gate_confirmed=bool(mask_gate_confirmed),
+        allow_enhanced=bool(allow_enhanced),
+        risk_acknowledged=bool(risk_acknowledged),
+        force_override=bool(force_override),
+        force_override_reason=force_override_reason,
+        allow_generative_attempt=bool(allow_generative_attempt),
+    )
     professional_meta = {}
     if workflow == WORKFLOW_PROFESSIONAL:
         # Prefer dedicated rationale; fall back to instructions for API callers.
-        from .professional import mask_risk_flags
-        has_unrestorable, has_uncertain = mask_risk_flags(
-            mask_record, has_unrestorable=has_unrestorable, has_uncertain=has_uncertain)
-        if mask_record.get('expert_force_override'):
-            force_override = True
-            force_override_reason = force_override_reason or mask_record.get('force_override_reason') or ''
         professional_meta = validate_professional_create(
             mask_record,
             rationale=rationale or instructions,
@@ -121,12 +134,9 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
             allow_enhanced=allow_enhanced,
             risk_acknowledged=risk_acknowledged,
             mask_gate_confirmed=mask_gate_confirmed,
-            has_unrestorable=has_unrestorable,
-            has_uncertain=has_uncertain,
-            force_override=force_override or expert_force_override,
+            force_override=force_override,
             force_override_reason=force_override_reason,
-            contest_demo=contest_demo,
-            expert_force_override=expert_force_override,
+            allow_generative_attempt=bool(allow_generative_attempt),
         )
     elif evidence_level:
         # Allow optional provenance fields on standard jobs without full gates.
@@ -165,11 +175,12 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
            'allow_enhanced': bool(professional_meta.get('allow_enhanced') or (mode == 'enhanced' and allow_enhanced)),
            'risk_acknowledged': bool(professional_meta.get('risk_acknowledged')),
            'mask_gate_confirmed': bool(professional_meta.get('mask_gate_confirmed')),
-           'has_unrestorable': bool(professional_meta.get('has_unrestorable')),
-           'has_uncertain': bool(professional_meta.get('has_uncertain')),
-           'force_override': bool(professional_meta.get('force_override')),
-           'force_override_reason': professional_meta.get('force_override_reason') or '',
-           'contest_demo': bool(professional_meta.get('contest_demo', False)),
+           'has_unrestorable': bool(risk_flags['has_unrestorable']),
+           'has_uncertain': bool(risk_flags['has_uncertain']),
+           'force_override': bool(force_override) if risk_flags['has_uncertain'] else False,
+           'force_override_reason': (force_override_reason or '')[:2000] if risk_flags['has_uncertain'] else '',
+           'allow_generative_attempt': bool(allow_generative_attempt),
+           'full_generation': bool(full_generation),
            'selected_as': None}
     store.put('job', job)
     engine.submit(identifier)

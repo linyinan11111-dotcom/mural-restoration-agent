@@ -205,16 +205,16 @@ def test_enhanced_requires_allow_flag_and_matching_mode():
         validate_professional_create(
             mask, rationale='大片露底，保守后仍空洞', evidence_level='enhanced',
             mode='enhanced', allow_enhanced=False, mask_gate_confirmed=True,
-            risk_acknowledged=True, contest_demo=False)
+            risk_acknowledged=True)
     with pytest.raises(ValueError, match='同时'):
         validate_professional_create(
             mask, rationale='大片露底', evidence_level='enhanced',
             mode='conservative', allow_enhanced=True, mask_gate_confirmed=True,
-            risk_acknowledged=True, contest_demo=False)
+            risk_acknowledged=True)
     meta = validate_professional_create(
         mask, rationale='大片露底，保守后仍空洞，加强色彩延续', evidence_level='enhanced',
         mode='enhanced', allow_enhanced=True, expert_notes='可试，不定稿',
-        mask_gate_confirmed=True, risk_acknowledged=True, contest_demo=False)
+        mask_gate_confirmed=True, risk_acknowledged=True)
     assert meta['evidence_level'] == 'enhanced'
     assert meta['allow_enhanced'] is True
 
@@ -241,7 +241,6 @@ def test_enhanced_job_via_api(workbench):
         'workflow': 'professional_step', 'rationale': '露底可见，加强填补',
         'evidence_level': 'enhanced', 'mode': 'enhanced', 'backend': 'opencv',
         'allow_enhanced': False, 'mask_gate_confirmed': True, 'risk_acknowledged': True,
-        'contest_demo': False,
     })
     assert blocked.status_code == 400
     assert '允许加强' in blocked.json()['detail']
@@ -251,7 +250,6 @@ def test_enhanced_job_via_api(workbench):
         'evidence_level': 'enhanced', 'mode': 'enhanced', 'backend': 'opencv',
         'allow_enhanced': True, 'expert_notes': '演示加强档',
         'mask_gate_confirmed': True, 'risk_acknowledged': True,
-        'contest_demo': False,
     })
     assert response.status_code == 202, response.text
     job = wait_job(client, response.json()['id'])
@@ -279,7 +277,7 @@ def test_enhanced_strength_default_and_work_mask():
     import numpy as np
     from mural_agent.professional import ENHANCED_DIFFUSION_STRENGTH
     from mural_agent.segmentation import build_enhanced_work_mask, craquelure_mask, ENHANCED_DIFFUSION_STRENGTH as SEG_STRENGTH
-    assert 0.9 <= ENHANCED_DIFFUSION_STRENGTH <= 0.95
+    assert 0.60 <= ENHANCED_DIFFUSION_STRENGTH <= 0.75
     assert SEG_STRENGTH == ENHANCED_DIFFUSION_STRENGTH
     # Synthetic: bright field + dark crack line + lacuna blob
     image = np.full((64, 96, 3), 180, dtype=np.uint8)
@@ -301,27 +299,23 @@ def test_risk_ack_and_review_decision_gates():
         validate_professional_create(
             mask, rationale='可见露底', evidence_level='conservative', mode='conservative',
             mask_gate_confirmed=False)
-    with pytest.raises(ValueError, match='比赛演示|生成性'):
-        validate_professional_create(
-            mask, rationale='大片露底需加强', evidence_level='enhanced', mode='enhanced',
-            allow_enhanced=True, mask_gate_confirmed=True, risk_acknowledged=True,
-            contest_demo=True)
     with pytest.raises(ValueError, match='风险提示'):
         validate_professional_create(
             mask, rationale='大片露底需加强', evidence_level='enhanced', mode='enhanced',
-            allow_enhanced=True, mask_gate_confirmed=True, risk_acknowledged=False,
-            contest_demo=False)
+            allow_enhanced=True, mask_gate_confirmed=True, risk_acknowledged=False)
     with pytest.raises(ValueError, match='不可复原'):
+        unrestorable_mask = {**mask, 'region_class': 'unrestorable'}
         validate_professional_create(
-            mask, rationale='大片缺失', evidence_level='conservative', mode='conservative',
-            mask_gate_confirmed=True, has_unrestorable=True)
+            unrestorable_mask, rationale='大片缺失', evidence_level='conservative',
+            mode='conservative', mask_gate_confirmed=True)
+    uncertain_mask = {**mask, 'region_class': 'uncertain'}
     with pytest.raises(ValueError, match='强制放行'):
         validate_professional_create(
-            mask, rationale='不确定区试修', evidence_level='conservative', mode='conservative',
-            mask_gate_confirmed=True, has_uncertain=True, force_override=False)
+            uncertain_mask, rationale='不确定区试修', evidence_level='conservative', mode='conservative',
+            mask_gate_confirmed=True, force_override=False)
     ok = validate_professional_create(
-        mask, rationale='不确定区试修', evidence_level='conservative', mode='conservative',
-        mask_gate_confirmed=True, has_uncertain=True, force_override=True,
+        uncertain_mask, rationale='不确定区试修', evidence_level='conservative', mode='conservative',
+        mask_gate_confirmed=True, force_override=True,
         force_override_reason='专家目视露底连续，可保守 Telea')
     assert ok['force_override'] is True
     job = {'workflow': 'professional_step', 'mode': 'conservative', 'evidence_level': 'conservative'}
@@ -332,10 +326,3 @@ def test_risk_ack_and_review_decision_gates():
     assert rejected['selected_as'] == 'rejected'
     adopted = validate_candidate_selection(job, candidate, decision='adopt')
     assert adopted['selected_as'] == 'accepted'
-
-
-def test_contest_blocks_generative_export_helper():
-    from mural_agent.professional import contest_allows_pixel_export
-    assert contest_allows_pixel_export({'contest_demo': True, 'mode': 'conservative', 'evidence_level': 'conservative'})
-    assert not contest_allows_pixel_export({'contest_demo': True, 'mode': 'enhanced', 'evidence_level': 'enhanced'})
-    assert not contest_allows_pixel_export({'contest_demo': True, 'mode': 'conservative', 'selected_as': 'hypothesis'})

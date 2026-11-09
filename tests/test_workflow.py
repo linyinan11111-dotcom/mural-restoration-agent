@@ -108,12 +108,84 @@ def test_compositing_discards_all_unmasked_model_changes():
     assert np.all(result[mask > 0] == 255)
 
 
+def test_thin_mask_composite_keeps_full_repair_strength():
+    original = np.full((8, 12, 3), [30, 60, 90], dtype=np.uint8)
+    prediction = np.full_like(original, 255)
+    mask = np.zeros((8, 12), dtype=np.uint8)
+    mask[4, 3:9] = 255  # 1 px hairline crack
+    result = composite(original, prediction, mask)
+    assert np.array_equal(result[mask == 0], original[mask == 0])
+    assert np.all(result[mask > 0] == 255)
+
+
+def test_thick_mask_composite_feathers_boundary_not_interior():
+    original = np.full((40, 40, 3), [20, 40, 60], dtype=np.uint8)
+    prediction = np.full_like(original, 220)
+    mask = np.zeros((40, 40), dtype=np.uint8)
+    mask[8:32, 8:32] = 255
+    result = composite(original, prediction, mask)
+    assert np.array_equal(result[mask == 0], original[mask == 0])
+    assert np.all(result[18:22, 18:22] == 220)
+
+
+def test_export_blocks_rejected_and_unflagged_hypothesis(workbench):
+    client, app = workbench
+    image, mask_record, *_ = upload_case(client)
+    response = client.post('/api/jobs', json={'image_id': image['id'], 'mask_id': mask_record['id'], 'candidate_count': 1})
+    job = wait_job(client, response.json()['id'])
+    chosen = job['candidates'][0]
+    assert client.post(f'/api/jobs/{job["id"]}/review',
+                       json={'candidate_id': chosen['id'], 'note': 'ok'}).status_code == 200
+    store = app.state.store
+    store.update('job', job['id'], selected_as='rejected', review={'decision': 'reject'})
+    blocked = client.get(f'/api/jobs/{job["id"]}/export')
+    assert blocked.status_code == 400 and '驳回' in blocked.json()['detail']
+    store.update('job', job['id'], selected_as='hypothesis',
+                 review={'decision': 'adopt', 'archive_as_hypothesis': False})
+    blocked = client.get(f'/api/jobs/{job["id"]}/export')
+    assert blocked.status_code == 400 and '假设' in blocked.json()['detail']
+    store.update('job', job['id'], selected_as='hypothesis',
+                 review={'decision': 'adopt', 'archive_as_hypothesis': True})
+    archive = client.get(f'/api/jobs/{job["id"]}/export')
+    assert archive.status_code == 200
+    with zipfile.ZipFile(BytesIO(archive.content)) as zipped:
+        manifest = json.loads(zipped.read('manifest.json'))
+        assert manifest['selected_as'] == 'hypothesis'
+
+
 def test_transparent_white_is_not_an_editable_mask_region():
     rgba = np.full((8, 8, 4), 255, dtype=np.uint8)
     rgba[..., 3] = 0
     rgba[2:4, 2:4, 3] = 255
     decoded = np.asarray(decode_image(png(rgba), mask=True))
     assert (decoded > 127).sum() == 4
+
+
+def test_defect_jobs_ignore_risk_classification(workbench):
+    """User explicitly opted out of risk gating for defect-list repairs."""
+    client, app = workbench
+    image, mask_record, original, mask = upload_case(client)
+    store, engine = app.state.store, app.state.engine
+    proposal_id = new_id()
+    folder = store.folder(proposal_id)
+    proposal_mask = np.zeros((64, 96), dtype=np.uint8)
+    proposal_mask[20:40, 30:50] = 255
+    Image.fromarray(proposal_mask).save(folder / 'mask.png')
+    store.put('proposal', {
+        'id': proposal_id, 'image_id': image['id'], 'created_at': '2026-11-09T00:00:00+00:00',
+        'fraction': float((proposal_mask > 0).mean()), 'confirmed': False,
+        'region_class': 'unrestorable', 'repair_allowed': False,
+        'metadata': {'type': 'crack', 'risk_notice': 'blocked by heuristic',
+                     'recommendation': {'backend': 'lama'}},
+    })
+    from mural_agent.defect_jobs import run_confirmed_defects
+    result = run_confirmed_defects(store, engine, image['id'], [proposal_id])
+    assert result['skipped'] == []
+    assert len(result['jobs']) == 1
+    job = result['jobs'][0]
+    assert job['defect_risk_class'] == 'unrestorable'
+    working_mask = store.get('mask', job['mask_id'])
+    assert working_mask['region_class'] == 'fillable_lacuna'
 
 
 def test_cancelled_queued_job_never_executes(workbench):

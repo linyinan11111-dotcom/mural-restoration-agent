@@ -29,7 +29,7 @@ from .planner import Budget
 class JobRequest(BaseModel):
     image_id: str
     mask_id: str
-    backend: Literal['opencv', 'telea', 'ns', 'lama', 'reference', 'diffusion', 'denoise', 'color', 'deblur', 'research'] = 'opencv'
+    backend: Literal['opencv', 'telea', 'ns', 'lama', 'reference', 'diffusion', 'imagine', 'denoise', 'color', 'deblur', 'research'] = 'opencv'
     planner: Literal['rules', 'api', 'local'] = 'rules'
     candidate_count: int = Field(default=2, ge=1, le=3)
     instructions: str = Field(default='', max_length=2000)
@@ -49,8 +49,7 @@ class JobRequest(BaseModel):
     has_uncertain: bool = False
     force_override: bool = False
     force_override_reason: str = ''
-    expert_force_override: bool = False
-    contest_demo: bool | None = False
+    allow_generative_attempt: bool = False
 
 
 class ReviewRequest(BaseModel):
@@ -236,10 +235,10 @@ def create_app(settings=None):
             mask_gate_confirmed=request.mask_gate_confirmed,
             has_unrestorable=request.has_unrestorable,
             has_uncertain=request.has_uncertain,
-            force_override=request.force_override or request.expert_force_override,
+            force_override=request.force_override,
             force_override_reason=request.force_override_reason,
-            contest_demo=request.contest_demo,
-            expert_force_override=request.expert_force_override)
+            allow_generative_attempt=request.allow_generative_attempt,
+            )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
@@ -300,14 +299,11 @@ def create_app(settings=None):
     @app.get('/api/assets/{identifier}/{name}')
     def asset(identifier: str, name: str):
         kinds = {'image.png': 'image', 'mask.png': 'mask', 'result.png': 'candidate', 'difference.png': 'candidate'}
-        observe_names = {
-            'overlay_risk.png', 'compare_source_overlay.png', 'legend.png', 'regions.json',
-        }
+        observe_names = {'overlay_risk.png', 'compare_source_overlay.png', 'legend.png', 'regions.json'}
         path = store.folder(identifier) / name
         if name in kinds:
             require(kinds[name], identifier)
         elif name in observe_names:
-            # Observe pack files live under the image folder after /api/competition-demo.
             require('image', identifier)
         else:
             raise HTTPException(404, '文件不存在。')

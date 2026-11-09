@@ -39,7 +39,7 @@ class Settings:
     imagine_base_url: str = 'https://api.x.ai/v1'
     imagine_model: str = 'grok-imagine-image-2.0'
     imagine_api_key: str = ''
-    imagine_timeout: float = 120
+    imagine_timeout: float = 180
 
     @property
     def api_ready(self) -> bool:
@@ -73,6 +73,6 @@ class Settings:
             imagine_base_url=os.getenv('MURAL_IMAGINE_BASE_URL', 'https://api.x.ai/v1').rstrip('/'),
             imagine_model=os.getenv('MURAL_IMAGINE_MODEL', 'grok-imagine-image-2.0'),
             imagine_api_key=os.getenv('MURAL_IMAGINE_API_KEY', ''),
-            imagine_timeout=float(os.getenv('MURAL_IMAGINE_TIMEOUT', '120')),
+            imagine_timeout=float(os.getenv('MURAL_IMAGINE_TIMEOUT', '180')),
         )
 

@@ -1,4 +1,4 @@
-﻿from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import json
 import platform
@@ -124,9 +124,20 @@ class Engine:
         plan.evidence = [job['registration_id']] if job.get('registration_id') else []
         plan.budget = Budget(**job.get('budget', {'candidates': job['candidate_count']}))
         for step in plan.steps:
+            if step.tool == 'imagine':
+                step.prompt = job['instructions'] or step.prompt
+                step.full_generation = bool(job.get('full_generation'))
+                continue
             if step.tool == 'diffusion':
                 step.prompt = job['instructions'] or step.prompt
                 step.structure_control = job.get('structure_control', False)
+                if job.get('full_generation'):
+                    step.full_generation = True
+                    step.strength = 0.95
+                    step.structure_control = bool(self.tools.availability().get('controlnet'))
+                    if not (job.get('instructions') or '').strip():
+                        from .professional import FULL_GENERATION_PROMPT
+                        step.prompt = FULL_GENERATION_PROMPT
                 if job.get('mode') == 'enhanced':
                     from .segmentation import ENHANCED_DIFFUSION_STRENGTH
                     from .professional import ENHANCED_DIFFUSION_PROMPT, ENHANCED_NEGATIVE_PROMPT
@@ -233,15 +244,6 @@ class Engine:
                     break
                 step = Step.model_validate(next_step) if next_step else plan.steps[min(len(candidates), len(plan.steps)-1)]
                 next_step = None
-                if job.get('mode', 'conservative') == 'conservative' and candidates:
-                    used_methods = {candidate.get('tool') for candidate in candidates}
-                    if step.tool in used_methods:
-                        alternate = next((candidate_step for candidate_step in plan.steps
-                                          if candidate_step.tool not in used_methods), None)
-                        if alternate is None:
-                            exit_reason = 'distinct_method_limit'
-                            break
-                        step = alternate
                 identifier = new_id()
                 attempt = {'id': identifier, 'step': step.model_dump(), 'status': 'executing', 'started_at': timestamp(),
                            'input_image_id': image['id'], 'mask_id': mask_record['id']}
@@ -327,6 +329,8 @@ class Engine:
         if job['selected_id'] not in [c['id'] for c in job['candidates']]:
             raise ValueError('选中结果不属于当前任务。')
         candidate = self.store.get('candidate', job['selected_id'])
+        from .professional import validate_selected_export
+        selection = validate_selected_export(job, candidate)
         image = self.store.get('image', job['image_id'])
         mask = self.store.get('mask', job['mask_id'])
         self.validate_inputs(job, image, mask)
@@ -340,7 +344,11 @@ class Engine:
             'mask': mask, 'job': job, 'selected_candidate': candidate, 'dependencies': dependencies,
             'python': platform.python_version(), 'working_color_space': '8-bit RGB EXIF-corrected working copy',
             'random_seed': candidate.get('parameters', {}).get('seed'),
-            'notice': '数字修复候选；无证据区域不能视为历史原貌。工程评分不是历史真实性概率。'}
+            'selected_as': selection['selected_as'],
+            'review': job.get('review'),
+            'notice': ('假设性建议：该档案不代表历史原貌，不能作为修复定稿。'
+                       if selection['selected_as'] == 'hypothesis' else
+                       '数字修复候选；无证据区域不能视为历史原貌。工程评分不是历史真实性概率。')}
         folder = self.store.folder(job_id)
         archive, temporary = folder/'restoration.zip', folder/'restoration.tmp'
         with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED) as output:

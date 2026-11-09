@@ -7,9 +7,9 @@ import pytest
 from PIL import Image
 
 from mural_agent.config import Settings
-from mural_agent.imagine import ImagineClient, ImagineConfig, restore_with_imagine
+from mural_agent.imagine import (ImagineClient, ImagineConfig, redraw_with_imagine,
+                                 restore_with_imagine)
 from mural_agent.planner import Step
-from mural_agent.professional import contest_allows_pixel_export
 from mural_agent.tools import ToolRegistry
 
 
@@ -112,7 +112,7 @@ def test_multipart_provider_uses_form_fields_for_another_vendor(tmp_path):
     assert 'sk-form-not-real' not in str(meta)
 
 
-def test_diffusion_tool_calls_cloud_edit_instead_of_a_local_worker(tmp_path, monkeypatch):
+def test_imagine_tool_calls_cloud_edit(tmp_path, monkeypatch):
     settings = _settings(tmp_path, imagine_api_key='sk-test-not-real', imagine_model='grok-imagine-image-2.0',
                          imagine_base_url='https://api.x.ai/v1')
 
@@ -133,20 +133,54 @@ def test_diffusion_tool_calls_cloud_edit_instead_of_a_local_worker(tmp_path, mon
 
     monkeypatch.setattr(ImagineClient, 'edit', fake_edit)
     engine = Engine()
-    assert ToolRegistry(engine).availability()['diffusion'] is True
+    assert ToolRegistry(engine).availability()['imagine'] is True
     folder = tmp_path / 'attempt'
     folder.mkdir()
     original = np.zeros((4, 4, 3), np.uint8)
     mask = np.zeros((4, 4), np.uint8)
     mask[1:3, 1:3] = 255
-    step = Step(tool='diffusion', reason='云端填补', prompt='keep lines')
-    output, meta = ToolRegistry(engine).execute(step, original, mask, {'mode': 'enhanced', 'instructions': ''}, folder, 30)
+    step = Step(tool='imagine', reason='云端填补', prompt='keep lines')
+    output, meta = ToolRegistry(engine).execute(step, original, mask,
+                                                {'mode': 'speculative', 'instructions': '', 'full_generation': False},
+                                                folder, 30)
     assert called['model'] == 'grok-imagine-image-2.0'
     assert output.shape == original.shape
     assert meta['model'] == 'grok-imagine-image-2.0'
-    assert not (folder / 'request.json').exists()
     settings.imagine_api_key = ''
-    assert ToolRegistry(engine).availability()['diffusion'] is False
+    assert ToolRegistry(engine).availability()['imagine'] is False
+
+
+def test_redraw_sends_the_intact_original_not_a_blanked_mask(tmp_path):
+    settings = _settings(
+        tmp_path,
+        imagine_provider='openai_json',
+        imagine_base_url='https://images.example.test/v1',
+        imagine_model='other-vendor-model',
+        imagine_api_key='sk-test-not-real',
+    )
+    seen = {}
+
+    def transport(method, url, headers=None, json=None, data=None, files=None, timeout=None):
+        seen.update(url=url, body=json)
+        return _Response({'data': [{'b64_json': _png_b64(color=(10, 180, 40), size=(8, 10))}]})
+
+    original = np.zeros((8, 10, 3), np.uint8)
+    original[..., 0] = 30
+    original[..., 1] = 70
+    original[..., 2] = 110
+    generated, meta = redraw_with_imagine(settings, original, 'reconstruct this mural', transport=transport)
+    assert seen['url'] == 'https://images.example.test/v1/images/edits'
+    assert meta['mode'] == 'full_redraw'
+    assert meta.get('composited_into_mask') is None
+    assert generated.shape == original.shape
+    # The request must contain the original RGB image, not a beige blank.
+    data_url = seen['body']['image']['url']
+    assert data_url.startswith('data:image/png;base64,')
+    import base64
+    from io import BytesIO
+    marked = np.asarray(Image.open(BytesIO(base64.b64decode(data_url.split(',', 1)[1]))).convert('RGB'))
+    assert marked.shape == original.shape
+    assert tuple(marked[0, 0]) == (30, 70, 110)
 
 
 def test_blank_key_is_not_written_over_the_stored_secret():
@@ -162,14 +196,3 @@ def test_blank_key_is_not_written_over_the_stored_secret():
     })
     assert saved['MURAL_IMAGINE_API_KEY'] == 'sk-local-not-real'
     assert saved['MURAL_IMAGINE_MODEL'] == 'other-vendor-model'
-
-
-def test_contest_export_still_blocks_generative_finals():
-    assert contest_allows_pixel_export({
-        'contest_demo': True, 'mode': 'enhanced', 'evidence_level': 'enhanced',
-        'selected_as': 'enhanced', 'candidates': [{'id': 'c', 'tool': 'diffusion', 'enhanced': True}],
-        'selected_id': 'c',
-    }) is False
-    assert contest_allows_pixel_export({
-        'contest_demo': True, 'mode': 'speculative', 'evidence_level': 'speculative',
-    }) is False

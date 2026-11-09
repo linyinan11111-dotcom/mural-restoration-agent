@@ -1,13 +1,15 @@
-"""Competition risk region kinds for professional_step.
+"""Risk region kinds for professional_step.
 
-REGION_KINDS
-------------
-repairable    — small/medium lacuna that may accept conservative texture fill
-uncertainty   — large lacuna without line continuity; red hatch; default block repair
-unrestorable  — inventing form against modern mount; solid red; display-only
+Canonical vocabulary (shared by risk_regions, professional, UI and docs):
 
-Competition: **forbid generating mural patterns/images**. Demo export = annotation
-overlay + review/refusal records only — never enhanced/speculative/restored finals.
+fillable_lacuna — small/medium lacuna that may accept conservative texture fill
+uncertain       — large lacuna without line continuity; red; default block repair
+unrestorable    — inventing form against modern mount; solid red; display-only
+
+Legacy aliases ``repairable`` and ``uncertainty`` are accepted on input and
+normalized to the canonical names. Never compare raw strings across modules:
+use :func:`normalize_region_kind`, :data:`BLOCKING_KINDS` or
+:func:`derive_risk_flags`.
 """
 from __future__ import annotations
 
@@ -15,20 +17,22 @@ from typing import Iterable
 
 import numpy as np
 
-REGION_KINDS = ('repairable', 'uncertainty', 'unrestorable')
-BLOCKING_KINDS = frozenset({'uncertainty', 'unrestorable'})
-# Aliases from earlier drafts / external docs
+REGION_KINDS = ('fillable_lacuna', 'uncertain', 'unrestorable')
+BLOCKING_KINDS = frozenset({'uncertain', 'unrestorable'})
+# Aliases from earlier drafts / older UI strokes.
 _ALIASES = {
-    'fillable_lacuna': 'repairable',
-    'fillable': 'repairable',
-    'uncertain': 'uncertainty',
+    'repairable': 'fillable_lacuna',
+    'fillable': 'fillable_lacuna',
+    'uncertainty': 'uncertain',
 }
 
 REGION_LABELS = {
-    'repairable': '可保守填的露底',
-    'uncertainty': '高不确定（须标红）',
+    'fillable_lacuna': '可保守填的露底',
+    'uncertain': '高不确定（须标红）',
     'unrestorable': '不可复原主张区（禁止补绘）',
 }
+# Back-compat alias map exposed to callers that import it by name.
+REGION_ALIASES = _ALIASES
 
 SMALL_FRAC = 0.008
 LARGE_FRAC = 0.03
@@ -40,11 +44,11 @@ REGION_CLASSES = REGION_KINDS
 BLOCKING_CLASSES = BLOCKING_KINDS
 
 
-def normalize_region_kind(value, default='repairable'):
-    klass = (value or default or 'repairable').strip().lower()
+def normalize_region_kind(value, default='fillable_lacuna'):
+    klass = (value or default or 'fillable_lacuna').strip().lower()
     klass = _ALIASES.get(klass, klass)
     if klass not in REGION_KINDS:
-        raise ValueError('区域类别须为 repairable / uncertainty / unrestorable。')
+        raise ValueError('区域类别须为 fillable_lacuna / uncertain / unrestorable。')
     return klass
 
 
@@ -55,12 +59,12 @@ normalize_region_class = normalize_region_kind
 def aggregate_region_kind(kinds: Iterable[str]) -> str:
     found = {normalize_region_kind(c) for c in kinds if c}
     if not found:
-        return 'repairable'
+        return 'fillable_lacuna'
     if 'unrestorable' in found:
         return 'unrestorable'
-    if 'uncertainty' in found:
-        return 'uncertainty'
-    return 'repairable'
+    if 'uncertain' in found:
+        return 'uncertain'
+    return 'fillable_lacuna'
 
 
 aggregate_region_class = aggregate_region_kind
@@ -132,21 +136,21 @@ def classify_component(*, area_frac: float, mount_touch: float, line_score: floa
         )
     if area_frac >= LARGE_FRAC and line_score < LINE_SCORE_OK:
         return (
-            'uncertainty',
+            'uncertain',
             '大面积露底且周边无线稿延续；高不确定，默认禁止补绘/加强/推测，须专家改判或强制放行。',
         )
     if area_frac <= SMALL_FRAC:
         return (
-            'repairable',
+            'fillable_lacuna',
             '小块可见露底；可候选保守纹理填补（非生成纹样），仍须人工确认。',
         )
     if line_score >= LINE_SCORE_OK:
         return (
-            'repairable',
+            'fillable_lacuna',
             '露底周边可见边缘/线稿延续迹象；可候选保守填补，禁止凭空生成图案。',
         )
     return (
-        'uncertainty',
+        'uncertain',
         '露底规模与线稿依据不足；标为不确定，默认禁止补绘。',
     )
 
@@ -193,7 +197,7 @@ def classify_mask_regions(rgb: np.ndarray, lacuna_mask: np.ndarray, mount_mask=N
             'line_score': round(line_score, 4),
             'evidence': evidence,
             'status': 'proposed',
-            'repair_allowed': kind == 'repairable',
+            'repair_allowed': kind == 'fillable_lacuna',
         })
         kind_masks[kind][component > 0] = 255
     aggregate = aggregate_region_kind(r['region_kind'] for r in regions)
@@ -207,7 +211,7 @@ def classify_mask_regions(rgb: np.ndarray, lacuna_mask: np.ndarray, mount_mask=N
         'lacuna_fraction': float((lacuna > 0).mean()),
         'blocking': aggregate in BLOCKING_KINDS,
         'notice': (
-            '风险分类为启发式演示：橙=repairable，红半透明=uncertainty，红斜线=unrestorable；'
+            '风险分类为启发式演示：uncertain 标红、unrestorable 深红斜线；'
             '禁止生成纹样/图像。以专业人员改判为准。'
         ),
     }
@@ -216,14 +220,21 @@ def classify_mask_regions(rgb: np.ndarray, lacuna_mask: np.ndarray, mount_mask=N
 def render_risk_overlay(rgb: np.ndarray, class_masks: dict,
                         alpha_repairable=0.40, alpha_uncertainty=0.50,
                         alpha_unrestorable=0.55) -> np.ndarray:
-    """repairable=orange; uncertainty=red translucent; unrestorable=red hatch."""
+    """fillable=orange; uncertain=red translucent; unrestorable=red hatch."""
     import cv2
     base = np.asarray(rgb).copy()
     h, w = base.shape[:2]
     overlay = base.astype(np.float32)
-    repairable = np.asarray(class_masks.get('repairable', np.zeros((h, w))) > 0)
-    uncertainty = np.asarray(class_masks.get('uncertainty', np.zeros((h, w))) > 0)
-    unrestorable = np.asarray(class_masks.get('unrestorable', np.zeros((h, w))) > 0)
+
+    def pick(*names):
+        for name in names:
+            if name in class_masks:
+                return np.asarray(class_masks[name]) > 0
+        return np.zeros((h, w), dtype=bool)
+
+    repairable = pick('fillable_lacuna', 'repairable')
+    uncertainty = pick('uncertain', 'uncertainty')
+    unrestorable = pick('unrestorable')
     if repairable.any():
         color = np.array([255.0, 152.0, 0.0], dtype=np.float32)  # orange
         overlay[repairable] = overlay[repairable] * (1 - alpha_repairable) + color * alpha_repairable
@@ -255,38 +266,63 @@ def render_risk_overlay(rgb: np.ndarray, class_masks: dict,
 
 
 def _record_kind(mask_record: dict) -> str:
-    raw = mask_record.get('region_kind') or mask_record.get('region_class') or 'repairable'
+    raw = mask_record.get('region_kind') or mask_record.get('region_class') or 'fillable_lacuna'
     try:
         return normalize_region_kind(raw)
     except ValueError:
-        return 'uncertainty'
+        return 'uncertain'
+
+
+def derive_risk_flags(mask_record: dict) -> dict:
+    """Server-side risk derivation from the frozen mask record.
+
+    Callers must not trust booleans supplied by the UI/API: the mask record is
+    the source of truth. Legacy aliases are normalized here.
+    """
+    kinds = []
+    try:
+        kinds.append(_record_kind(mask_record))
+    except Exception:  # noqa: BLE001
+        kinds.append('uncertain')
+    force_regions = False
+    for region in mask_record.get('risk_regions') or []:
+        if not isinstance(region, dict):
+            continue
+        status = (region.get('status') or '').strip().lower()
+        if status in {'refused', 'skipped'}:
+            continue
+        try:
+            kind = normalize_region_kind(
+                region.get('region_kind') or region.get('region_class') or 'fillable_lacuna')
+        except ValueError:
+            kind = 'uncertain'
+        if status in {'fillable_confirmed', 'repairable_confirmed'}:
+            kind = 'fillable_lacuna'
+        if status == 'force_approved':
+            force_regions = True
+        kinds.append(kind)
+    return {
+        'has_uncertain': 'uncertain' in kinds,
+        'has_unrestorable': 'unrestorable' in kinds,
+        'force_regions': force_regions,
+        'region_class': aggregate_region_kind(kinds),
+    }
 
 
 def mask_blocks_repair(mask_record: dict, *, expert_force_override: bool = False):
     if expert_force_override or mask_record.get('expert_force_override'):
         return False, ''
-    kind = _record_kind(mask_record)
-    if kind == 'unrestorable':
+    flags = derive_risk_flags(mask_record)
+    if flags['has_unrestorable']:
         return True, (
             '专业分步：当前选区含不可复原主张区（unrestorable）。'
             '禁止像素修复与生成纹样/图像；请改选区、标为可填，或专家强制放行并记档。'
         )
-    if kind == 'uncertainty':
+    if flags['has_uncertain']:
         return True, (
-            '专业分步：当前选区含高不确定区（uncertainty，已标红）。'
+            '专业分步：当前选区含高不确定区（uncertain，已标红）。'
             '默认禁止补绘、加强与推测生成；请确认可填、拒答跳过，或专家强制放行并记档。'
         )
-    for region in mask_record.get('risk_regions') or []:
-        rkind = normalize_region_kind(
-            region.get('region_kind') or region.get('region_class') or 'repairable')
-        status = (region.get('status') or '').strip().lower()
-        if status in {'refused', 'skipped', 'fillable_confirmed', 'repairable_confirmed'}:
-            continue
-        if rkind in BLOCKING_KINDS and status not in {'force_approved'}:
-            return True, (
-                f"专业分步：区域 #{region.get('id')} 仍为 {rkind}，禁止补绘/生成。"
-                '请「确认可填」「标为不确定/拒答」或专家强制放行。'
-            )
     return False, ''
 
 
@@ -296,28 +332,28 @@ def apply_region_action(regions: list, region_id: int, action: str) -> list:
                'mark_uncertainty', 'refuse_skip', 'force_approve'}
     if action not in allowed:
         raise ValueError(
-            '动作须为 confirm_repairable / mark_uncertainty / refuse_skip / force_approve。')
-    if action == 'confirm_fillable':
-        action = 'confirm_repairable'
-    if action == 'mark_uncertain':
-        action = 'mark_uncertainty'
+            '动作须为 confirm_fillable / mark_uncertain / refuse_skip / force_approve。')
+    if action in {'confirm_repairable', 'confirm_fillable'}:
+        action = 'confirm_fillable'
+    if action in {'mark_uncertainty', 'mark_uncertain'}:
+        action = 'mark_uncertain'
     updated = []
     found = False
     for region in regions:
         item = dict(region)
         if int(item.get('id', -1)) == int(region_id):
             found = True
-            if action == 'confirm_repairable':
-                item['region_kind'] = item['region_class'] = 'repairable'
-                item['status'] = 'repairable_confirmed'
+            if action == 'confirm_fillable':
+                item['region_kind'] = item['region_class'] = 'fillable_lacuna'
+                item['status'] = 'fillable_confirmed'
                 item['repair_allowed'] = True
-                item['label'] = REGION_LABELS['repairable']
+                item['label'] = REGION_LABELS['fillable_lacuna']
                 item['evidence'] = (item.get('evidence') or '') + '；专家确认可保守填（禁止生成纹样）。'
-            elif action == 'mark_uncertainty':
-                item['region_kind'] = item['region_class'] = 'uncertainty'
-                item['status'] = 'uncertainty'
+            elif action == 'mark_uncertain':
+                item['region_kind'] = item['region_class'] = 'uncertain'
+                item['status'] = 'uncertain'
                 item['repair_allowed'] = False
-                item['label'] = REGION_LABELS['uncertainty']
+                item['label'] = REGION_LABELS['uncertain']
             elif action == 'refuse_skip':
                 item['status'] = 'refused'
                 item['repair_allowed'] = False
@@ -345,15 +381,3 @@ def build_refusal_record(*, image_id, mask_id=None, region=None, reason='', acto
         'created_at': timestamp(),
         'policy': '禁止生成纹样/图像；拒答已记档。正赛导出仅标注层+复核记录。',
     }
-
-
-def competition_export_allowed(job: dict | None = None, *, include_restored=False) -> tuple[bool, str]:
-    """正赛导出：只允许标注层+复核记录；禁用 enhanced/speculative/修复成图。"""
-    if include_restored:
-        return False, '正赛导出禁用修复成图；仅允许 overlay_risk 与复核/拒答记录。'
-    if job:
-        mode = (job.get('mode') or '').strip().lower()
-        level = (job.get('evidence_level') or '').strip().lower()
-        if mode in {'enhanced', 'speculative'} or level in {'enhanced', 'speculative'}:
-            return False, '正赛导出禁用 enhanced/speculative 产物；请导出风险标注与复核记录。'
-    return True, ''

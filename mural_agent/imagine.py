@@ -27,6 +27,14 @@ DEFAULT_BASE_URL = "https://api.x.ai/v1"
 DEFAULT_MODEL = "grok-imagine-image-2.0"
 MAX_SIDE = 1024
 
+FULL_REDRAW_PROMPT = (
+    "Reconstruct this damaged ancient mural photograph as a complete coherent mural painting. "
+    "Keep the original subject, composition, visible painted lines and mineral pigments. "
+    "Repair missing plaster and paint without inventing extra figures or symbols. "
+    "Do not add text, watermark, frame, or modern objects. "
+    "This is a hypothetical digital reconstruction, not a historical photograph."
+)
+
 PROVIDERS = {
     "openai_json": {
         "label": "OpenAI 兼容 JSON Images",
@@ -283,6 +291,56 @@ class ImagineClient:
             "note": "云端生图按整图编辑，不是严格掩膜 inpaint；调用方须把结果合成回掩膜内。",
         }
         return generated, meta
+
+    def redraw(self, original: np.ndarray, prompt: str = "") -> tuple[np.ndarray, dict]:
+        """Full-image reinterpretation from the intact original (no blank mask)."""
+        self._missing_key()
+        height, width = original.shape[:2]
+        scale = min(1.0, MAX_SIDE / max(height, width))
+        upload = original
+        if scale < 1:
+            upload = np.asarray(Image.fromarray(original).resize(
+                (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+                Image.Resampling.LANCZOS))
+        png = _png_bytes(upload)
+        text = (prompt or "").strip() or FULL_REDRAW_PROMPT
+        provider = normalize_provider(self.config.provider)
+        url = self.config.base_url.rstrip("/") + "/images/edits"
+        if provider == "openai_multipart":
+            files = {"image": ("image.png", png, "image/png")}
+            data = {"model": self.config.model, "prompt": text[:2000],
+                    "n": "1", "response_format": "b64_json"}
+            response = self._request("POST", url, data=data, files=files)
+        else:
+            body = {
+                "model": self.config.model,
+                "prompt": text[:2000],
+                "n": 1,
+                "response_format": "b64_json",
+                "image": {
+                    "url": "data:image/png;base64," + base64.b64encode(png).decode("ascii"),
+                    "type": "image_url",
+                },
+            }
+            response = self._request("POST", url, json_body=body)
+        generated = _resize(_image_from_payload(response.json(), self._fetch_url), original.shape)
+        meta = {
+            "provider": provider,
+            "base_url": self.config.base_url,
+            "model": self.config.model,
+            "endpoint": "/images/edits",
+            "device": "cloud",
+            "mode": "full_redraw",
+            "note": "云端按完整原图重绘整幅；结果为推测性重构，不是历史复原。",
+        }
+        return generated, meta
+
+
+def redraw_with_imagine(settings, original, prompt: str = "", transport=None):
+    """Full-image cloud redraw from the intact original; no mask, no compositing."""
+    config = ImagineConfig.from_settings(settings)
+    generated, meta = ImagineClient(config, transport=transport).redraw(original, prompt)
+    return generated, meta
 
 
 def restore_with_imagine(settings, original, mask, prompt: str = "", transport=None):
