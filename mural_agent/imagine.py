@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import io
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 import numpy as np
@@ -170,6 +171,35 @@ def _redact(text: str, secret: str) -> str:
     return text
 
 
+def _classify_resource_url(url: str, api_base: str, api_key: str = "") -> str:
+    """Validate an image URL before an unauthenticated download.
+
+    The images API call is the only request that may carry the Bearer token.
+    A URL in the response is a separate resource. The configured API host is
+    the trusted service; any other host is third-party image storage and must
+    not receive that credential. https is required, except http on loopback
+    for a local service. Embedded userinfo, or the API key appearing in the
+    URL itself, is rejected.
+    """
+    text = (url or "").strip()
+    if any(char in text for char in " \t\r\n"):
+        raise RuntimeError("云端图像地址无效。")
+    parsed = urlsplit(text)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.username or parsed.password or parsed.scheme not in {"https", "http"} or not host:
+        raise RuntimeError("云端图像地址无效。")
+    if api_key and api_key in text:
+        raise RuntimeError("云端图像地址不能包含 API Key。")
+    loopback = host in {"localhost", "127.0.0.1", "::1"}
+    api_host = (urlsplit(api_base or "").hostname or "").lower().rstrip(".")
+    trusted_service = bool(api_host) and host == api_host
+    if parsed.scheme != "https" and not loopback:
+        if trusted_service:
+            raise RuntimeError("云端图像只能从 HTTPS 或本机地址下载。")
+        raise RuntimeError("第三方图像存储必须使用 HTTPS，且不能接收 API Key。")
+    return text
+
+
 def _image_from_payload(payload: dict, fetch_url) -> np.ndarray:
     data = payload.get("data") or []
     if not data:
@@ -222,19 +252,7 @@ class ImagineClient:
         if not self.config.model:
             raise ValueError("云端生图尚未填写模型名。")
 
-    def _request(self, method: str, url: str, *, json_body=None, data=None, files=None):
-        headers = {"Authorization": f"Bearer {self.config.api_key}"}
-        timeout = self.config.timeout
-        if self.transport is not None:
-            response = self.transport(method, url, headers=headers, json=json_body, data=data, files=files, timeout=timeout)
-        else:
-            with httpx.Client(timeout=timeout) as client:
-                if method == "GET":
-                    response = client.get(url, headers=headers)
-                elif files is not None:
-                    response = client.post(url, headers=headers, data=data, files=files)
-                else:
-                    response = client.post(url, headers={**headers, "Content-Type": "application/json"}, json=json_body)
+    def _check_response(self, response):
         if getattr(response, "status_code", 200) >= 400:
             detail = ""
             try:
@@ -248,10 +266,35 @@ class ImagineClient:
                 detail = getattr(response, "text", "") or ""
             detail = _redact(detail[:240], self.config.api_key)
             raise RuntimeError(f"云端生图请求失败（HTTP {response.status_code}）。{detail}".rstrip())
+
+    def _exchange(self, method: str, url: str, *, headers, json_body=None, data=None, files=None):
+        timeout = self.config.timeout
+        if self.transport is not None:
+            response = self.transport(method, url, headers=headers, json=json_body, data=data, files=files, timeout=timeout)
+        else:
+            with httpx.Client(timeout=timeout) as client:
+                if method == "GET":
+                    response = client.get(url, headers=headers)
+                elif files is not None:
+                    response = client.post(url, headers=headers, data=data, files=files)
+                else:
+                    response = client.post(url, headers={**headers, "Content-Type": "application/json"}, json=json_body)
+        self._check_response(response)
         return response
 
+    def _request(self, method: str, url: str, *, json_body=None, data=None, files=None):
+        """Authenticated images API call. Resource downloads must not use this."""
+        headers = {"Authorization": f"Bearer {self.config.api_key}"}
+        return self._exchange(method, url, headers=headers, json_body=json_body, data=data, files=files)
+
     def _fetch_url(self, url: str) -> bytes:
-        response = self._request("GET", url)
+        """Download a provider image URL with no API credential.
+
+        `_classify_resource_url` separates the trusted API host from third-party
+        storage. Neither kind of resource fetch receives the Bearer token.
+        """
+        target = _classify_resource_url(url, self.config.base_url, self.config.api_key)
+        response = self._exchange("GET", target, headers={})
         return response.content
 
     def edit(self, original: np.ndarray, mask: np.ndarray, prompt: str = "") -> tuple[np.ndarray, dict]:
