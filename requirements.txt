@@ -6,6 +6,9 @@ numpy>=2,<3
 opencv-python-headless>=4.11,<5
 scikit-image>=0.26,<0.28
 httpx>=0.28,<1
+# planner.py imports pydantic at process start (desktop_web → engine → planner).
+# Declared here so a base install does not depend on FastAPI pulling it in.
+pydantic>=2,<3
 PySide6-Essentials>=6.8,<7
 PySide6-Addons>=6.8,<7
 PySide6-WebEngine>=6.8,<7

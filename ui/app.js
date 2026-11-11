@@ -2,7 +2,7 @@
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const ACTIVE = ['queued', 'planning', 'running', 'evaluating'];
-  const state = { bridge: null, image: null, job: null, candidate: null, keepEmpty: false, maskStrokes: [], regionStrokes: [], strokeOrder: [], currentStroke: null,
+  const state = { bridge: null, image: null, job: null, candidate: null, keepEmpty: false, maskStrokes: [], regionStrokes: [], strokeOrder: [], currentStroke: null, batchJobIds: [],
     baseMask: null, maskDirty: false, tool: 'brush', brushSize: 28, zoom: 1, promptPoints: [], promptLabels: [], promptBox: null,
     proposal: null, references: [], selectedReference: null, registration: null, lastSnapshot: null, toastTimer: null,
     auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false, damageDrawMode: false, damageDraw: null, damageJobKey: null,
@@ -50,19 +50,35 @@
   const AUTO_HINT_PRO = 'AI 会列出疑似缺损。核对选区、选择修补方案，再逐项或批量运行。';
   const isProfessional = () => Boolean($('#professional-step')?.checked);
   const currentWorkflow = () => (isProfessional() ? 'professional_step' : 'standard');
-  const isRegionTool = (tool) => tool === 'uncertain' || tool === 'uncertainty' || tool === 'unrestorable';
-  const regionPixelStats = () => {
-    const stats = { uncertain: false, unrestorable: false };
-    if (!regionCanvas || !regionCtx || !regionCanvas.width) return stats;
-    const data = regionCtx.getImageData(0, 0, regionCanvas.width, regionCanvas.height).data;
-    for (let i = 0; i < data.length; i += 4) {
-      const a = data[i + 3]; if (a < 40) continue;
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      // unrestorable: deeper red, lower brightness
-      if (r > 150 && g < 50 && r - g > 120) stats.unrestorable = true;
-      else if (r > 160 && g < 90) stats.uncertain = true;
+  const isRegionTool = (tool) => Boolean(window.MuralLogic?.REGION_TOOLS[tool]);
+  let categoryCanvas = null;
+  let categoryCtx = null;
+  const JOB_STATUS = { queued: '排队中', planning: '规划中', running: '修复中', evaluating: '质量检查', review: '等待复核', interrupted: '已中断', failed: '执行失败', cancelled: '已取消' };
+  const jobStatusText = (status) => JOB_STATUS[status] || status || '';
+  function ensureCategoryCanvas() {
+    if (!regionCanvas) return null;
+    if (!categoryCanvas) {
+      categoryCanvas = document.createElement('canvas');
+      categoryCtx = categoryCanvas.getContext('2d', { willReadFrequently: true });
     }
-    return stats;
+    if (categoryCanvas.width !== regionCanvas.width || categoryCanvas.height !== regionCanvas.height) {
+      categoryCanvas.width = regionCanvas.width;
+      categoryCanvas.height = regionCanvas.height;
+    }
+    return categoryCtx;
+  }
+  function resetRegionBuffers() {
+    if (regionCtx && regionCanvas?.width) regionCtx.clearRect(0, 0, regionCanvas.width, regionCanvas.height);
+    if (categoryCtx && categoryCanvas?.width) categoryCtx.clearRect(0, 0, categoryCanvas.width, categoryCanvas.height);
+  }
+  const regionPixelStats = () => {
+    const empty = { uncertain: false, unrestorable: false };
+    if (categoryCtx && categoryCanvas?.width) {
+      const category = window.MuralLogic.aggregateCategory(categoryCtx.getImageData(0, 0, categoryCanvas.width, categoryCanvas.height).data);
+      if (category.uncertain || category.unrestorable) return category;
+    }
+    if (!regionCanvas || !regionCtx || !regionCanvas.width) return empty;
+    return window.MuralLogic.aggregateRegionPixels(regionCtx.getImageData(0, 0, regionCanvas.width, regionCanvas.height).data);
   };
   const hasUnrestorableRegions = () => regionPixelStats().unrestorable;
   const hasUncertainRegions = () => regionPixelStats().uncertain;
@@ -90,12 +106,32 @@
     if (allowEnhanced) allowEnhanced.style.display = on && mode === 'enhanced' ? '' : 'none';
     const maskGate = $('#mask-gate-confirmed')?.closest('label');
     if (maskGate) maskGate.style.display = on ? '' : 'none';
+    syncRiskControls();
+  };
+  const syncRiskControls = () => {
+    const on = isProfessional();
+    const uncertain = hasUncertainRegions();
+    const unrestorable = hasUnrestorableRegions();
     const force = $('#force-override')?.closest('label');
-    const showForce = on && hasUncertainRegions();
+    const showForce = on && uncertain;
     if (force) force.style.display = showForce ? '' : 'none';
     const reason = $('#force-override-reason');
     if (reason) reason.classList.toggle('hidden', !(showForce && $('#force-override')?.checked));
-    const blocked = on && hasUnrestorableRegions();
+    const banner = $('#risk-banner');
+    if (banner) {
+      banner.classList.toggle('blocking', unrestorable);
+      if (on && unrestorable) {
+        banner.textContent = '不可复原红区：禁止任何像素修复，请只导出标注图与报告。';
+        banner.classList.remove('hidden');
+      } else if (on && uncertain) {
+        banner.textContent = '不确定红区：默认不修复；可在高级设置中专家强制放行后做保守修补。';
+        banner.classList.remove('hidden');
+      } else {
+        banner.textContent = '';
+        banner.classList.add('hidden');
+      }
+    }
+    const blocked = on && unrestorable;
     const runBtn = $('[data-action="run-repair"]');
     if (runBtn && blocked) runBtn.disabled = true;
   };
@@ -170,42 +206,51 @@
       stroke.points.slice(1).forEach(point => ctx.lineTo(...point)); ctx.stroke();
     }
     ctx.restore();
-    if (stroke.tool === 'eraser' && regionCtx) {
-      regionCtx.save();
-      regionCtx.globalCompositeOperation = 'destination-out';
-      regionCtx.lineCap = 'round'; regionCtx.lineJoin = 'round'; regionCtx.lineWidth = stroke.size;
-      regionCtx.strokeStyle = 'rgba(0,0,0,1)'; regionCtx.fillStyle = 'rgba(0,0,0,1)';
-      if (stroke.points.length === 1) {
-        regionCtx.beginPath(); regionCtx.arc(stroke.points[0][0], stroke.points[0][1], stroke.size / 2, 0, Math.PI * 2); regionCtx.fill();
-      } else {
-        regionCtx.beginPath(); regionCtx.moveTo(...stroke.points[0]);
-        stroke.points.slice(1).forEach(point => regionCtx.lineTo(...point)); regionCtx.stroke();
-      }
-      regionCtx.restore();
+  }
+
+  function stampStroke(target, stroke, color, composite) {
+    if (!target || !stroke?.points?.length) return;
+    target.save();
+    target.globalCompositeOperation = composite;
+    target.strokeStyle = color; target.fillStyle = color; target.globalAlpha = 1;
+    target.lineCap = 'round'; target.lineJoin = 'round'; target.lineWidth = stroke.size;
+    if (stroke.points.length === 1) {
+      target.beginPath(); target.arc(stroke.points[0][0], stroke.points[0][1], stroke.size / 2, 0, Math.PI * 2); target.fill();
+    } else {
+      target.beginPath(); target.moveTo(...stroke.points[0]);
+      stroke.points.slice(1).forEach(point => target.lineTo(...point)); target.stroke();
     }
+    target.restore();
   }
 
   function paintRegionStroke(stroke) {
-    if (!regionCtx || !stroke.points.length) return;
-    regionCtx.save();
-    regionCtx.globalCompositeOperation = 'source-over';
     const color = REGION_COLORS[stroke.tool] || REGION_COLORS.uncertainty;
-    regionCtx.strokeStyle = color; regionCtx.fillStyle = color;
-    regionCtx.lineCap = 'round'; regionCtx.lineJoin = 'round'; regionCtx.lineWidth = stroke.size;
-    if (stroke.points.length === 1) {
-      regionCtx.beginPath(); regionCtx.arc(stroke.points[0][0], stroke.points[0][1], stroke.size / 2, 0, Math.PI * 2); regionCtx.fill();
-    } else {
-      regionCtx.beginPath(); regionCtx.moveTo(...stroke.points[0]);
-      stroke.points.slice(1).forEach(point => regionCtx.lineTo(...point)); regionCtx.stroke();
-    }
-    regionCtx.restore();
+    stampStroke(regionCtx, stroke, color, 'source-over');
+  }
+
+  function paintCategoryStroke(stroke) {
+    const color = stroke.tool === 'unrestorable' ? '#0000ff' : '#ff0000';
+    stampStroke(categoryCtx, stroke, color, 'source-over');
+  }
+
+  function eraseRegionStroke(stroke) {
+    stampStroke(regionCtx, stroke, 'rgba(0,0,0,1)', 'destination-out');
+    stampStroke(categoryCtx, stroke, 'rgba(0,0,0,1)', 'destination-out');
   }
 
   function redrawRegions() {
     if (!regionCtx) return;
+    ensureCategoryCanvas();
     regionCtx.clearRect(0, 0, regionCanvas.width, regionCanvas.height);
-    state.regionStrokes.forEach(paintRegionStroke);
-    if (state.currentStroke && isRegionTool(state.currentStroke.tool)) paintRegionStroke(state.currentStroke);
+    if (categoryCtx) categoryCtx.clearRect(0, 0, categoryCanvas.width, categoryCanvas.height);
+    window.MuralLogic.regionEdits(state.strokeOrder, state.regionStrokes, state.maskStrokes, state.currentStroke).forEach(edit => {
+      if (edit.op === 'paint') {
+        paintRegionStroke(edit.stroke);
+        paintCategoryStroke(edit.stroke);
+      } else if (edit.op === 'erase') {
+        eraseRegionStroke(edit.stroke);
+      }
+    });
   }
 
   function redrawMask() {
@@ -217,6 +262,7 @@
     state.maskDirty = true;
     $('#mask-fraction').textContent = `${Math.round(maskFraction() * 10000) / 100}%`;
     setBusy(state.running);
+    syncRiskControls();
   }
 
   function pointAt(event) {
@@ -239,9 +285,13 @@
       $('#mask-gate-confirmed').checked = false;
       $('#culture-summary').classList.add('hidden');
       state.maskStrokes = []; state.regionStrokes = []; state.strokeOrder = []; state.currentStroke = null; state.baseMask = null; state.maskDirty = false;
+      state.batchJobIds = [];
+      state.batchRecords = [];
       state.proposalIds = [];
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (regionCtx) regionCtx.clearRect(0, 0, regionCanvas.width, regionCanvas.height);
+      resetRegionBuffers();
+      renderBatchQueue();
+      syncRiskControls();
       image.removeAttribute('src'); imageWrap.classList.add('hidden'); $('#empty-state').classList.remove('hidden');
       $('#image-name').textContent = '导入壁画图像'; $('#image-meta').textContent = '选择本地图片开始';
       $('#candidate-count').textContent = '0'; $('#mask-fraction').textContent = '';
@@ -266,7 +316,11 @@
     $('#mask-gate-confirmed').checked = false;
     $('#culture-summary').classList.add('hidden');
     state.maskStrokes = []; state.regionStrokes = []; state.strokeOrder = []; state.currentStroke = null; state.baseMask = null; state.maskDirty = false;
-    if (regionCtx) regionCtx.clearRect(0, 0, regionCanvas.width || 0, regionCanvas.height || 0);
+    state.batchJobIds = [];
+    state.batchRecords = [];
+    resetRegionBuffers();
+    renderBatchQueue();
+    syncRiskControls();
     state.zoom = 1; state.promptPoints = []; state.promptLabels = []; state.promptBox = null;
     $('#image-name').textContent = record.name;
     $('#image-meta').textContent = `${record.width} × ${record.height} · 原始文件已归档`;
@@ -474,6 +528,7 @@
       setBusy(Boolean(activeJob));
       $('[data-action="auto-restore"]').disabled = Boolean(activeJob) || state.autoBusy || !state.image;
       renderJob(state.job);
+      renderBatchQueue();
       renderHistory(snapshot.jobs || []);
       if (!$('#triple-modal').classList.contains('hidden')) renderTriple(snapshot.jobs || []);
       const damageJobKey = (snapshot.jobs || []).map(job => `${job.id}:${job.status}:${job.defect_proposal_id || ''}`).join('|');
@@ -517,7 +572,7 @@
     if (!job) return;
     if (job.mode === 'speculative') $('#archive-hypothesis').checked = true;
     const running = ACTIVE.includes(job.status);
-    $('#job-status').textContent = ({ queued: '排队中', planning: '规划中', running: '修复中', evaluating: '质量检查', review: '等待复核', interrupted: '已中断', failed: '执行失败', cancelled: '已取消' })[job.status] || job.status;
+    $('#job-status').textContent = jobStatusText(job.status);
     $('#job-progress').style.width = `${Math.max(0, Math.min(100, job.progress || 0))}%`;
     $('#job-percent').textContent = `${Math.max(0, Math.min(100, Math.round(job.progress || 0)))}%`;
     const startedAt = Date.parse(job.started_at || '');
@@ -551,6 +606,53 @@
     $('#event-log').innerHTML = lines.join('') || '<div class="empty-log">生成任务后显示规划、工具调用与检查结果。</div>';
     if (running) $('#event-log').scrollTop = $('#event-log').scrollHeight;
     renderCandidates(job);
+    syncRiskControls();
+  }
+
+  function renderBatchQueue() {
+    const node = $('#job-queue');
+    if (!node) return;
+    const known = new Map();
+    (state.batchRecords || []).forEach(job => { if (job?.id) known.set(job.id, job); });
+    (state.lastSnapshot?.jobs || []).forEach(job => { if (job?.id) known.set(job.id, job); });
+    if (state.job?.id && !known.has(state.job.id)) known.set(state.job.id, state.job);
+    const batch = (state.batchJobIds || []).map(id => known.get(id)).filter(Boolean);
+    const focus = window.MuralLogic.focusCreatedJobs(batch);
+    if (!focus?.showQueue) {
+      node.classList.add('hidden');
+      node.innerHTML = '';
+      return;
+    }
+    node.classList.remove('hidden');
+    node.innerHTML = `<span class="job-queue-label">本批任务</span>` + batch.map((job, index) => {
+      const active = job.id === state.job?.id ? 'active' : '';
+      const name = job.defect_type || `任务 ${index + 1}`;
+      return `<button type="button" class="job-queue-item ${active}" data-queue-job="${escapeHtml(job.id)}">${escapeHtml(`${index + 1}. ${name} · ${jobStatusText(job.status)}`)}</button>`;
+    }).join('');
+    $$('[data-queue-job]', node).forEach(button => button.addEventListener('click', () => {
+      const job = known.get(button.dataset.queueJob);
+      if (!job) return;
+      state.job = job;
+      state.candidate = null;
+      showPage('workbench');
+      showView('results');
+      renderJob(state.job);
+      renderBatchQueue();
+    }));
+  }
+
+  function presentCreatedJobs(jobs) {
+    const focus = window.MuralLogic.focusCreatedJobs(jobs);
+    if (!focus) return;
+    const created = (jobs || []).filter(job => job && job.id);
+    state.batchJobIds = focus.batchJobIds;
+    state.batchRecords = created;
+    state.job = created.find(job => job.id === focus.jobId) || created[0];
+    state.candidate = null;
+    showPage('workbench');
+    showView('results');
+    renderJob(state.job);
+    renderBatchQueue();
   }
 
   function renderCandidates(job) {
@@ -869,6 +971,7 @@
     try {
       const job = await invoke(kind === 'large' ? 'generateLargeRepair' : 'generateFullImage', state.image.id);
       state.triple[kind === 'large' ? 'largeJobId' : 'fullJobId'] = job.id;
+      presentCreatedJobs(job?.id ? [job] : []);
       renderTriple();
       toast(kind === 'large'
         ? '已启动 AI 大面积修补；生成结果是推测，不是历史原貌。'
@@ -933,12 +1036,12 @@
         `<option value="ns" ${selectedMethod === 'ns' ? 'selected' : ''}>Navier–Stokes 细线修补</option>` +
         `<option value="color" ${selectedMethod === 'color' ? 'selected' : ''}>局部色调匹配</option></select></label>` +
         `${hint ? `<small>${escapeHtml(hint)}</small>` : ''}${statusText ? `<small>${statusText}</small>` : ''}</div>` +
-        `<div class="damage-item-actions"><label class="damage-confirm"><input type="checkbox" data-confirm-defect="${index}" ${item.confirmed ? 'checked' : ''} ${disabled ? 'disabled' : ''}>确认</label>` +
+        `<div class="damage-item-actions"><label class="damage-include"><input type="checkbox" data-include-defect="${index}" ${item.includeInBatch !== false ? 'checked' : ''} ${disabled ? 'disabled' : ''}>纳入批次</label>` +
         `<button class="button" data-run-defect="${index}" ${disabled ? 'disabled' : ''}>运行修复</button></div></div>`;
     }).join('');
     $$('[data-damage]').forEach(button => button.addEventListener('click', () => selectDamage(Number(button.dataset.damage))));
-    $$('[data-confirm-defect]').forEach(input => input.addEventListener('change', () => {
-      state.damageItems[Number(input.dataset.confirmDefect)].confirmed = input.checked;
+    $$('[data-include-defect]').forEach(input => input.addEventListener('change', () => {
+      state.damageItems[Number(input.dataset.includeDefect)].includeInBatch = input.checked;
       renderDamage(limitations);
     }));
     $$('[data-method-defect]').forEach(select => select.addEventListener('change', () => {
@@ -952,7 +1055,8 @@
       ? 'AI 生成式补全（实验）：每项会用扩散模型按框直接生成，结果是推测，只能按假设归档；可能修坏，可重跑。'
       : `${limitations || ''} 首项建议：${damageRecommendation(first)}。所有项都可以尝试修复，结果不满意可重跑。`;
     if (runAll) {
-      runAll.disabled = busy || !state.damageItems.some(item => !jobs.some(job => job.defect_proposal_id === item.proposal_id && ACTIVE.includes(job.status)));
+      const included = window.MuralLogic.batchRunIndexes(state.damageItems).map(index => state.damageItems[index]);
+      runAll.disabled = busy || !included.some(item => !jobs.some(job => job.defect_proposal_id === item.proposal_id && ACTIVE.includes(job.status)));
     }
   }
 
@@ -1001,6 +1105,7 @@
       return;
     }
     hideModal('damage-modal');
+    presentCreatedJobs(result.jobs);
     const skipped = result.skipped?.length ? `；跳过 ${result.skipped.length} 项：${result.skipped[0].reason}` : '';
     toast(`已启动 ${count} 个修复任务${skipped}。`);
     await refresh();
@@ -1175,7 +1280,12 @@
           }
           break;
         }
-        case 'run-all-defects': await runDefectRepairs(state.damageItems.map((_, index) => index)); break;
+        case 'run-all-defects': {
+          const indexes = window.MuralLogic.batchRunIndexes(state.damageItems);
+          if (!indexes.length) return toast('没有纳入批次的缺损项。取消勾选的项不会进入“运行全部”，可单独点“运行修复”。');
+          await runDefectRepairs(indexes);
+          break;
+        }
         case 'cancel-job': { const identifier = state.activeJobId || state.job?.id; if (identifier) { await invoke('cancelJob', identifier); } await refresh(); break; }
         case 'resume-job': if (state.job) await invoke('resumeJob', state.job.id); await refresh(); break;
         case 'select-candidate': {
@@ -1400,5 +1510,5 @@
   // Test seam: the acceptance tests drive the same mask round-trip and job flow
   // through the shipped frontend instead of duplicating the logic in Python.
   window.__shibui = { state, loadImage, installMask, showMaskFromBase64, exportMaskBase64, refresh, renderDamage,
-    renderComparison, layoutComparison };
+    renderComparison, layoutComparison, regionPixelStats, presentCreatedJobs, renderBatchQueue, syncRiskControls };
 })();

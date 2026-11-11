@@ -193,8 +193,8 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 .damage-item small { display: block; color: var(--muted); margin-top: 3px; line-height: 1.45; }
 .damage-item.selected { background: #f3f6f8; box-shadow: inset 2px 0 0 #68798d; }
 .damage-item-actions { display: grid; justify-items: end; gap: 5px; }
-.damage-confirm { display: flex; align-items: center; gap: 4px; font-size: 9px; white-space: nowrap; }
-.damage-confirm input { margin: 0; }
+.damage-include { display: flex; align-items: center; gap: 4px; font-size: 9px; white-space: nowrap; }
+.damage-include input { margin: 0; }
 .damage-item .button { min-height: 25px; padding: 0 7px; font-size: 9px; }
 .damage-workflow { margin: 12px 0; padding-top: 10px; border-top: 1px solid var(--line-soft); }
 .damage-workflow .proposal-preview { height: 135px; }
@@ -210,7 +210,13 @@ textarea { resize: vertical; min-height: 66px; line-height: 1.5; }
 .damage-modal-card .damage-method { white-space: nowrap; }
 .damage-modal-card .damage-method select { flex: 1 1 auto; min-width: 0; font-size: 11px; padding: 4px 7px; }
 .damage-modal-card .damage-item .button { font-size: 11px; min-height: 32px; }
-.damage-modal-card .damage-confirm { font-size: 11px; }
+.damage-modal-card .damage-include { font-size: 11px; }
+.job-queue { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
+.job-queue-label { flex: 1 0 100%; color: var(--muted); font-size: 10px; }
+.job-queue-item { border: 1px solid var(--line); background: #fff; border-radius: 5px; padding: 4px 8px; font-size: 10px; text-align: left; }
+.job-queue-item.active { border-color: #68798d; box-shadow: inset 2px 0 0 #68798d; }
+.risk-banner { margin: 8px 0 0; color: #8a4b2a; background: #fff6ee; border: 1px solid #f0ddc8; border-radius: 5px; padding: 6px 8px; }
+.risk-banner.blocking { color: #8a3b45; background: #fff4f4; border-color: #f0d4d8; }
 .damage-generative-row { margin: 9px 0 0; padding: 7px 8px; border: 1px dashed #c48a2d; border-radius: 5px; background: #fff8ec; color: #6d5426; }
 .damage-modal-card .damage-generative-row { font-size: 11px; line-height: 1.5; }
 .damage-modal-card .notice { font-size: 11px; line-height: 1.55; }

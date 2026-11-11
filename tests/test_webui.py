@@ -392,3 +392,237 @@ def test_merge_proposal_and_aux_version_contract(window, qt_app):
     window.bridge.aux = {'status': 'done', 'result': {'notice': 'x'}}
     window.bridge.aux_version += 1
     assert json.loads(window.bridge.snapshot())['aux_version'] == version + 1
+
+
+def load_demo(window, qt_app):
+    assert run_js(window, "document.querySelector('[data-action=\"load-demo\"]').click(); true") is True
+    ready = ("Boolean(window.__shibui.state.image && document.querySelector('#mask-canvas').width > 0"
+             " && document.querySelector('#mask-canvas').getBoundingClientRect().width > 20)")
+    assert wait_until(qt_app, lambda: run_js(window, ready) is True, 30), 'demo image did not lay out the mask canvas'
+
+
+def paint_region_tool(window, tool, brush=36):
+    script = f"""(() => {{
+      const canvas = document.querySelector('#mask-canvas');
+      const rect = canvas.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      document.querySelector('[data-tool="{tool}"]').click();
+      const slider = document.querySelector('#brush-size');
+      slider.value = '{brush}';
+      slider.dispatchEvent(new Event('input', {{bubbles: true}}));
+      const fire = (type, buttons) => canvas.dispatchEvent(new PointerEvent(type, {{
+        bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse',
+        clientX: x, clientY: y, button: 0, buttons}}));
+      fire('pointerdown', 1);
+      fire('pointerup', 0);
+      const region = document.querySelector('#region-canvas');
+      const ctx = region.getContext('2d');
+      const px = Math.floor(region.width / 2), py = Math.floor(region.height / 2);
+      const pixel = Array.from(ctx.getImageData(px, py, 1, 1).data);
+      document.querySelector('.advanced-settings').open = true;
+      const force = document.querySelector('#force-override').closest('label');
+      const banner = document.querySelector('#risk-banner');
+      return JSON.stringify({{
+        pixel, stats: window.__shibui.regionPixelStats(),
+        forceDisplay: force.style.display,
+        forceVisible: force.getClientRects().length > 0,
+        banner: banner.textContent,
+        bannerHidden: banner.classList.contains('hidden'),
+      }});
+    }})()"""
+    return json.loads(run_js(window, script))
+
+
+def test_uncertain_stroke_is_not_classified_as_unrestorable(window, qt_app):
+    """P2-8: rgba(220,0,60) used to match the unrestorable red test first."""
+    load_demo(window, qt_app)
+    uncertain = paint_region_tool(window, 'uncertain')
+    pixel = uncertain['pixel']
+    assert pixel[0] >= 200 and pixel[1] < 40 and pixel[2] >= 40 and pixel[3] > 100, pixel
+    assert uncertain['stats']['uncertain'] is True
+    assert uncertain['stats']['unrestorable'] is False
+    assert uncertain['forceDisplay'] != 'none'
+    assert uncertain['forceVisible'] is True
+    assert uncertain['bannerHidden'] is False
+    assert '不确定' in uncertain['banner']
+    assert '不可复原' not in uncertain['banner']
+
+    assert run_js(window, "document.querySelector('[data-action=\"clear-mask\"]').click(); true") is True
+    blocked = paint_region_tool(window, 'unrestorable')
+    assert blocked['stats']['unrestorable'] is True
+    assert blocked['stats']['uncertain'] is False, blocked
+    assert blocked['forceDisplay'] == 'none'
+    assert blocked['forceVisible'] is False
+    assert '不可复原' in blocked['banner']
+
+
+def test_eraser_removes_risk_marks_and_ordinary_mask(window, qt_app):
+    """P2-9: redraw used to repaint every risk stroke and ignore eraser history."""
+    load_demo(window, qt_app)
+    before = paint_region_tool(window, 'uncertain', brush=28)
+    assert before['pixel'][3] > 100
+    assert before['stats']['uncertain'] is True
+    script = """(() => {
+      const canvas = document.querySelector('#mask-canvas');
+      const rect = canvas.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      document.querySelector('[data-tool="eraser"]').click();
+      const slider = document.querySelector('#brush-size');
+      slider.value = '80';
+      slider.dispatchEvent(new Event('input', {bubbles: true}));
+      const fire = (type, buttons) => canvas.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 7, pointerType: 'mouse',
+        clientX: x, clientY: y, button: 0, buttons}));
+      fire('pointerdown', 1);
+      fire('pointerup', 0);
+      const region = document.querySelector('#region-canvas');
+      const pixel = Array.from(region.getContext('2d').getImageData(
+        Math.floor(region.width / 2), Math.floor(region.height / 2), 1, 1).data);
+      const banner = document.querySelector('#risk-banner');
+      return JSON.stringify({pixel, stats: window.__shibui.regionPixelStats(),
+        bannerHidden: banner.classList.contains('hidden')});
+    })()"""
+    erased = json.loads(run_js(window, script))
+    assert erased['pixel'][3] < 40, erased['pixel']
+    assert erased['stats'] == {'uncertain': False, 'unrestorable': False}
+    assert erased['bannerHidden'] is True
+
+    mask = json.loads(run_js(window, """(() => {
+      const canvas = document.querySelector('#mask-canvas');
+      const rect = canvas.getBoundingClientRect();
+      const x = rect.left + rect.width * 0.25;
+      const y = rect.top + rect.height * 0.25;
+      document.querySelector('[data-tool="brush"]').click();
+      const slider = document.querySelector('#brush-size');
+      slider.value = '24';
+      slider.dispatchEvent(new Event('input', {bubbles: true}));
+      const fire = (type, px, py, buttons) => canvas.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 8, pointerType: 'mouse',
+        clientX: px, clientY: py, button: 0, buttons}));
+      fire('pointerdown', x, y, 1);
+      fire('pointerup', x, y, 0);
+      const point = [(x - rect.left) * canvas.width / rect.width, (y - rect.top) * canvas.height / rect.height];
+      const before = canvas.getContext('2d').getImageData(Math.floor(point[0]), Math.floor(point[1]), 1, 1).data[3];
+      document.querySelector('[data-tool="eraser"]').click();
+      slider.value = '80';
+      slider.dispatchEvent(new Event('input', {bubbles: true}));
+      fire('pointerdown', x, y, 1);
+      fire('pointerup', x, y, 0);
+      const after = canvas.getContext('2d').getImageData(Math.floor(point[0]), Math.floor(point[1]), 1, 1).data[3];
+      return JSON.stringify({before, after});
+    })()"""))
+    assert mask['before'] > 100, mask
+    assert mask['after'] < 40, mask
+
+
+def test_defect_include_filter_limits_batch_but_not_single_run(window, qt_app):
+    """P2-9: the old 确认 checkbox did not change which defect jobs were created."""
+    load_demo(window, qt_app)
+    image_id = run_js(window, 'window.__shibui.state.image.id')
+    defects = []
+    for bbox in ([120, 140, 280, 320], [420, 180, 640, 400]):
+        made = json.loads(window.bridge.addManualDefect(image_id, json.dumps({
+            'bbox': bbox, 'type': 'manual', 'size': 'manual'})))
+        defects.append(made['defect'])
+    script = """(() => {
+      window.__shibui.state.damageItems = %s;
+      window.__shibui.renderDamage();
+      const boxes = document.querySelectorAll('[data-include-defect]');
+      if (boxes.length !== 2 || boxes[0].closest('label').textContent.trim() !== '纳入批次') return 'markup';
+      boxes[0].click();
+      const runAll = document.querySelector('[data-action="run-all-defects"]');
+      if (runAll.disabled) return 'disabled';
+      runAll.click();
+      return 'started';
+    })()""" % json.dumps(defects)
+    assert run_js(window, script) == 'started'
+
+    def batch_jobs():
+        return [job for job in json.loads(window.bridge.snapshot())['jobs']
+                if job.get('defect_proposal_id')]
+
+    def batch_settled():
+        jobs = batch_jobs()
+        idle = run_js(window, "!window.__shibui.state.running && document.querySelector('[data-run-defect=\"0\"]') && !document.querySelector('[data-run-defect=\"0\"]').disabled")
+        return len(jobs) == 1 and jobs[0]['status'] not in ACTIVE and idle is True
+
+    assert wait_until(qt_app, batch_settled, 40), batch_jobs()
+    assert batch_jobs()[0]['defect_proposal_id'] == defects[1]['proposal_id']
+    assert run_js(window, 'window.__shibui.state.job && window.__shibui.state.job.id') == batch_jobs()[0]['id']
+    assert run_js(window, "document.querySelector('#job-status').textContent") != '尚未开始'
+
+    assert run_js(window, "document.querySelector('[data-run-defect=\"0\"]').click(); 'clicked'") == 'clicked'
+    assert wait_until(qt_app, lambda: len(batch_jobs()) == 2, 30), batch_jobs()
+    proposals = {job['defect_proposal_id'] for job in batch_jobs()}
+    assert proposals == {defects[0]['proposal_id'], defects[1]['proposal_id']}
+    assert run_js(window, 'window.__shibui.state.job.defect_proposal_id') == defects[0]['proposal_id']
+
+
+def test_defect_list_start_binds_the_new_jobs(window, qt_app, monkeypatch):
+    """P1-3: creating defect jobs must select them instead of leaving 尚未开始."""
+    import threading
+    release = threading.Event()
+    original = window.engine.run
+
+    def blocking(job_id):
+        assert release.wait(30)
+        return original(job_id)
+
+    monkeypatch.setattr(window.engine, 'run', blocking)
+    try:
+        load_demo(window, qt_app)
+        image_id = run_js(window, 'window.__shibui.state.image.id')
+        defects = []
+        for bbox in ([100, 120, 260, 300], [400, 200, 620, 420]):
+            made = json.loads(window.bridge.addManualDefect(image_id, json.dumps({
+                'bbox': bbox, 'type': 'crack', 'size': 'small'})))
+            defects.append(made['defect'])
+        assert run_js(window, """(() => {
+          window.__shibui.state.damageItems = %s;
+          window.__shibui.renderDamage();
+          const button = document.querySelector('[data-action="run-all-defects"]');
+          if (button.disabled) return 'disabled';
+          button.click();
+          return 'started';
+        })()""" % json.dumps(defects)) == 'started'
+
+        def bound():
+            view = run_js(window, """JSON.stringify({
+              jobId: window.__shibui.state.job && window.__shibui.state.job.id,
+              status: document.querySelector('#job-status').textContent,
+              queue: document.querySelectorAll('#job-queue .job-queue-item').length,
+              queueHidden: document.querySelector('#job-queue').classList.contains('hidden'),
+              results: document.querySelector('#results-view').classList.contains('active'),
+              cancelHidden: document.querySelector('[data-action="cancel-job"]').classList.contains('hidden'),
+            })""")
+            if not view:
+                return False
+            state = json.loads(view)
+            return (state['jobId'] and state['status'] != '尚未开始' and state['queue'] == 2
+                    and state['queueHidden'] is False and state['results'] is True
+                    and state['cancelHidden'] is False)
+
+        assert wait_until(qt_app, bound, 20), run_js(window, "document.querySelector('#job-status').textContent")
+        switched = json.loads(run_js(window, """(() => {
+          const current = window.__shibui.state.job.id;
+          const other = [...document.querySelectorAll('#job-queue .job-queue-item')]
+            .find(button => button.dataset.queueJob !== current);
+          other.click();
+          return JSON.stringify({from: current, to: window.__shibui.state.job.id,
+            status: document.querySelector('#job-status').textContent});
+        })()"""))
+        assert switched['to'] and switched['to'] != switched['from']
+        assert switched['status'] != '尚未开始'
+        release.set()
+
+        def results_visible():
+            return run_js(window, "document.querySelectorAll('#candidate-strip .candidate-card').length") >= 1
+
+        assert wait_until(qt_app, results_visible, 40)
+        shown = run_js(window, 'window.__shibui.state.job.id')
+        created = {job['id'] for job in json.loads(window.bridge.snapshot())['jobs']}
+        assert shown in created
+    finally:
+        release.set()
