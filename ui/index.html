@@ -53,6 +53,7 @@
             </div>
 
             <div id="results-view" class="view-panel results-panel">
+              <section id="batch-jobs" class="batch-jobs hidden" aria-label="缺损修复批次"><div id="batch-summary" class="field-note" aria-live="polite"></div><div id="batch-job-list" class="batch-job-list"></div></section>
               <div id="candidate-strip" class="candidate-strip"><div class="empty-inline">修复候选会显示在这里</div></div>
               <div class="comparison-toolbar"><select id="comparison-mode"><option value="compare">滑动对照</option><option value="result">修复结果</option><option value="difference">修改差异</option></select><span>原图</span><input id="compare-range" type="range" min="0" max="100" value="50"><span>候选</span><span id="candidate-device" class="muted"></span></div>
               <div id="comparison-stage" class="comparison-stage"><div class="empty-inline">选择候选查看结果</div></div>
@@ -100,12 +101,10 @@
               <label class="check-row"><input id="allow-enhanced" type="checkbox"><span>确认执行加强修复（结果不代表历史定稿）</span></label><label class="check-row"><input id="allow-generative-attempt" type="checkbox"><span>允许 AI 尝试性补全大面积缺损（实验：扩散生成，须按假设归档）</span></label>
               <label class="check-row"><input id="controlnet" type="checkbox" disabled><span>推测模式使用结构控制</span></label>
               <div class="budget-row"><label>修订轮数 <input id="revisions" type="number" min="0" max="2" value="2"></label><label>时间上限 <input id="timeout" type="number" min="10" max="3600" value="300"></label></div>
-              <button class="button cancel-button hidden" data-action="cancel-job">取消当前任务</button>
-              <button class="button hidden" data-action="resume-job" id="resume-button">从检查点续跑</button>
               </div>
               </details>
             </div>
-            <div class="execution-section"><div class="section-title"><span>执行进度</span><span class="status-text"><span id="job-status">尚未开始</span> · <b id="job-percent">0%</b></span></div><div class="progress-track"><span id="job-progress"></span></div><div id="progress-estimate" class="progress-estimate">等待任务</div><div id="event-log" class="event-log"><div class="empty-log">生成任务后显示规划、工具调用与检查结果。</div></div></div>
+            <div class="execution-section"><div class="section-title"><span>执行进度</span><span class="status-text"><span id="job-status">尚未开始</span> · <b id="job-percent">0%</b></span></div><div class="progress-track"><span id="job-progress"></span></div><div id="progress-estimate" class="progress-estimate">等待任务</div><div class="action-row"><button class="button cancel-button hidden" data-action="cancel-job">取消当前任务</button><button class="button hidden" data-action="resume-job" id="resume-button">从检查点续跑</button></div><div id="event-log" class="event-log"><div class="empty-log">生成任务后显示规划、工具调用与检查结果。</div></div></div>
           </aside>
         </div>
       </section>

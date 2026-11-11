@@ -6,11 +6,15 @@
     baseMask: null, maskDirty: false, tool: 'brush', brushSize: 28, zoom: 1, promptPoints: [], promptLabels: [], promptBox: null,
     proposal: null, references: [], selectedReference: null, registration: null, lastSnapshot: null, toastTimer: null,
     auxVersion: -1, damageItems: [], selectedDamage: null, activeJobId: null, running: false, autoBusy: false, damageDrawMode: false, damageDraw: null, damageJobKey: null,
-    triple: { largeJobId: null, fullJobId: null } };
+    batchJobIds: [], defectSubmitting: false, triple: { largeJobId: null, fullJobId: null } };
   const canvas = $('#mask-canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const regionCanvas = $('#region-canvas');
   const regionCtx = regionCanvas ? regionCanvas.getContext('2d', { willReadFrequently: true }) : null;
+  // Opaque category labels are separate from the translucent display colours.
+  // Red encodes unrestorable; blue encodes uncertain (including its alias).
+  const regionClasses = document.createElement('canvas');
+  const regionClassCtx = regionClasses.getContext('2d', { willReadFrequently: true });
   const image = $('#source-image');
   const imageWrap = $('#canvas-wrap');
   const REGION_COLORS = {
@@ -53,14 +57,13 @@
   const isRegionTool = (tool) => tool === 'uncertain' || tool === 'uncertainty' || tool === 'unrestorable';
   const regionPixelStats = () => {
     const stats = { uncertain: false, unrestorable: false };
-    if (!regionCanvas || !regionCtx || !regionCanvas.width) return stats;
-    const data = regionCtx.getImageData(0, 0, regionCanvas.width, regionCanvas.height).data;
+    if (!regionClasses.width || !regionClasses.height) return stats;
+    const data = regionClassCtx.getImageData(0, 0, regionClasses.width, regionClasses.height).data;
     for (let i = 0; i < data.length; i += 4) {
       const a = data[i + 3]; if (a < 40) continue;
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      // unrestorable: deeper red, lower brightness
-      if (r > 150 && g < 50 && r - g > 120) stats.unrestorable = true;
-      else if (r > 160 && g < 90) stats.uncertain = true;
+      if (data[i] > data[i + 2]) stats.unrestorable = true;
+      else stats.uncertain = true;
+      if (stats.uncertain && stats.unrestorable) break;
     }
     return stats;
   };
@@ -74,6 +77,17 @@
   const setAutoStatus = (text) => {
     const fallback = isProfessional() ? AUTO_HINT_PRO : AUTO_HINT;
     $('#auto-status').textContent = text || fallback;
+  };
+  const syncRegionUi = () => {
+    const on = isProfessional();
+    const regions = regionPixelStats();
+    const force = $('#force-override')?.closest('label');
+    const showForce = on && regions.uncertain;
+    if (force) force.style.display = showForce ? '' : 'none';
+    const reason = $('#force-override-reason');
+    if (reason) reason.classList.toggle('hidden', !(showForce && $('#force-override')?.checked));
+    const runBtn = $('[data-action="run-repair"]');
+    if (runBtn) runBtn.disabled = state.running || !state.image || !maskHasPixels() || (on && regions.unrestorable);
   };
   const syncProfessionalUi = () => {
     const on = isProfessional();
@@ -90,14 +104,7 @@
     if (allowEnhanced) allowEnhanced.style.display = on && mode === 'enhanced' ? '' : 'none';
     const maskGate = $('#mask-gate-confirmed')?.closest('label');
     if (maskGate) maskGate.style.display = on ? '' : 'none';
-    const force = $('#force-override')?.closest('label');
-    const showForce = on && hasUncertainRegions();
-    if (force) force.style.display = showForce ? '' : 'none';
-    const reason = $('#force-override-reason');
-    if (reason) reason.classList.toggle('hidden', !(showForce && $('#force-override')?.checked));
-    const blocked = on && hasUnrestorableRegions();
-    const runBtn = $('[data-action="run-repair"]');
-    if (runBtn && blocked) runBtn.disabled = true;
+    syncRegionUi();
   };
   const fileUrl = (value) => value || '';
 
@@ -156,67 +163,49 @@
     return count / (canvas.width * canvas.height);
   }
 
-  function paintStroke(stroke) {
+  function drawStroke(context, stroke, color, operation = 'source-over') {
     if (!stroke.points.length) return;
-    if (isRegionTool(stroke.tool)) return paintRegionStroke(stroke);
-    ctx.save();
-    ctx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
-    ctx.strokeStyle = '#f5a623'; ctx.fillStyle = '#f5a623'; ctx.globalAlpha = 1;
-    ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = stroke.size;
+    context.save();
+    context.globalCompositeOperation = operation;
+    context.strokeStyle = color; context.fillStyle = color;
+    context.lineCap = 'round'; context.lineJoin = 'round'; context.lineWidth = stroke.size;
     if (stroke.points.length === 1) {
-      ctx.beginPath(); ctx.arc(stroke.points[0][0], stroke.points[0][1], stroke.size / 2, 0, Math.PI * 2); ctx.fill();
+      context.beginPath(); context.arc(stroke.points[0][0], stroke.points[0][1], stroke.size / 2, 0, Math.PI * 2); context.fill();
     } else {
-      ctx.beginPath(); ctx.moveTo(...stroke.points[0]);
-      stroke.points.slice(1).forEach(point => ctx.lineTo(...point)); ctx.stroke();
+      context.beginPath(); context.moveTo(...stroke.points[0]);
+      stroke.points.slice(1).forEach(point => context.lineTo(...point)); context.stroke();
     }
-    ctx.restore();
-    if (stroke.tool === 'eraser' && regionCtx) {
-      regionCtx.save();
-      regionCtx.globalCompositeOperation = 'destination-out';
-      regionCtx.lineCap = 'round'; regionCtx.lineJoin = 'round'; regionCtx.lineWidth = stroke.size;
-      regionCtx.strokeStyle = 'rgba(0,0,0,1)'; regionCtx.fillStyle = 'rgba(0,0,0,1)';
-      if (stroke.points.length === 1) {
-        regionCtx.beginPath(); regionCtx.arc(stroke.points[0][0], stroke.points[0][1], stroke.size / 2, 0, Math.PI * 2); regionCtx.fill();
-      } else {
-        regionCtx.beginPath(); regionCtx.moveTo(...stroke.points[0]);
-        stroke.points.slice(1).forEach(point => regionCtx.lineTo(...point)); regionCtx.stroke();
-      }
-      regionCtx.restore();
-    }
+    context.restore();
   }
 
-  function paintRegionStroke(stroke) {
-    if (!regionCtx || !stroke.points.length) return;
-    regionCtx.save();
-    regionCtx.globalCompositeOperation = 'source-over';
-    const color = REGION_COLORS[stroke.tool] || REGION_COLORS.uncertainty;
-    regionCtx.strokeStyle = color; regionCtx.fillStyle = color;
-    regionCtx.lineCap = 'round'; regionCtx.lineJoin = 'round'; regionCtx.lineWidth = stroke.size;
-    if (stroke.points.length === 1) {
-      regionCtx.beginPath(); regionCtx.arc(stroke.points[0][0], stroke.points[0][1], stroke.size / 2, 0, Math.PI * 2); regionCtx.fill();
-    } else {
-      regionCtx.beginPath(); regionCtx.moveTo(...stroke.points[0]);
-      stroke.points.slice(1).forEach(point => regionCtx.lineTo(...point)); regionCtx.stroke();
+  function paintStroke(stroke) {
+    if (isRegionTool(stroke.tool)) {
+      if (regionCtx) drawStroke(regionCtx, stroke, REGION_COLORS[stroke.tool]);
+      drawStroke(regionClassCtx, stroke, stroke.tool === 'unrestorable' ? '#ff0000' : '#0000ff');
+      return;
     }
-    regionCtx.restore();
-  }
-
-  function redrawRegions() {
-    if (!regionCtx) return;
-    regionCtx.clearRect(0, 0, regionCanvas.width, regionCanvas.height);
-    state.regionStrokes.forEach(paintRegionStroke);
-    if (state.currentStroke && isRegionTool(state.currentStroke.tool)) paintRegionStroke(state.currentStroke);
+    const operation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
+    drawStroke(ctx, stroke, '#f5a623', operation);
+    if (stroke.tool === 'eraser') {
+      if (regionCtx) drawStroke(regionCtx, stroke, '#000000', operation);
+      drawStroke(regionClassCtx, stroke, '#000000', operation);
+    }
   }
 
   function redrawMask() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (regionCtx) regionCtx.clearRect(0, 0, regionCanvas.width, regionCanvas.height);
+    regionClassCtx.clearRect(0, 0, regionClasses.width, regionClasses.height);
     if (state.baseMask) ctx.drawImage(state.baseMask, 0, 0, canvas.width, canvas.height);
-    state.maskStrokes.filter(s => !isRegionTool(s.tool)).forEach(paintStroke);
-    if (state.currentStroke && !isRegionTool(state.currentStroke.tool)) paintStroke(state.currentStroke);
-    redrawRegions();
+    // Replay both kinds in creation order so erasing and undo affect all layers.
+    let maskIndex = 0, regionIndex = 0;
+    state.strokeOrder.forEach(kind => paintStroke(kind === 'region'
+      ? state.regionStrokes[regionIndex++] : state.maskStrokes[maskIndex++]));
+    if (state.currentStroke) paintStroke(state.currentStroke);
     state.maskDirty = true;
     $('#mask-fraction').textContent = `${Math.round(maskFraction() * 10000) / 100}%`;
     setBusy(state.running);
+    syncRegionUi();
   }
 
   function pointAt(event) {
@@ -229,6 +218,9 @@
   function loadImage(record) {
     clearDamageHighlight(); hideModal('damage-modal'); hideModal('triple-modal');
     state.triple = { largeJobId: null, fullJobId: null };
+    state.batchJobIds = [];
+    renderBatchJobs([]);
+    regionClassCtx.clearRect(0, 0, regionClasses.width, regionClasses.height);
     state.damageDrawMode = false; state.damageDraw = null;
     $('#canvas-wrap')?.classList.remove('damage-drawing');
     if (!record) {
@@ -290,6 +282,7 @@
     return new Promise(resolve => {
       image.onload = () => {
         canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+        regionClasses.width = image.naturalWidth; regionClasses.height = image.naturalHeight;
         if (regionCanvas) { regionCanvas.width = image.naturalWidth; regionCanvas.height = image.naturalHeight; regionCtx.clearRect(0, 0, regionCanvas.width, regionCanvas.height); }
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         updateCanvasSize();
@@ -333,13 +326,13 @@
     redrawMask(); state.maskDirty = false;
   }
 
-  function installMask(url) {
+  function installMask(url, expectedJobId = null) {
     const expectedImageId = state.image?.id;
     return new Promise((resolve, reject) => {
       const maskImage = new Image();
       maskImage.onload = () => {
         try {
-          if (state.image?.id === expectedImageId) installMaskFromSource(maskImage);
+          if (state.image?.id === expectedImageId && (!expectedJobId || state.job?.id === expectedJobId)) installMaskFromSource(maskImage);
           resolve();
         }
         catch (error) { reject(error); }
@@ -467,13 +460,15 @@
         const record = snapshot.images.find(item => item.id === latestJob?.image_id) || snapshot.images[0];
         await loadImage(record);
       }
-      const activeJob = (snapshot.jobs || []).find(job => ACTIVE.includes(job.status));
-      state.activeJobId = activeJob?.id || null;
       if (state.job) state.job = snapshot.jobs.find(item => item.id === state.job.id) || state.job;
       else if (!hadImage && !state.keepEmpty && snapshot.jobs?.length) state.job = snapshot.jobs.find(item => item.image_id === state.image?.id) || null;
-      setBusy(Boolean(activeJob));
-      $('[data-action="auto-restore"]').disabled = Boolean(activeJob) || state.autoBusy || !state.image;
+      const activeJob = ACTIVE.includes(state.job?.status) ? state.job : (snapshot.jobs || []).find(job => ACTIVE.includes(job.status));
+      state.activeJobId = activeJob?.id || null;
+      setBusy(Boolean(activeJob) || state.defectSubmitting);
+      $('[data-action="auto-restore"]').disabled = state.running || state.autoBusy || !state.image;
       renderJob(state.job);
+      syncRegionUi();
+      renderBatchJobs(snapshot.jobs || []);
       renderHistory(snapshot.jobs || []);
       if (!$('#triple-modal').classList.contains('hidden')) renderTriple(snapshot.jobs || []);
       const damageJobKey = (snapshot.jobs || []).map(job => `${job.id}:${job.status}:${job.defect_proposal_id || ''}`).join('|');
@@ -539,7 +534,7 @@
       progressCopy = `任务${job.status === 'failed' ? '失败' : job.status === 'cancelled' ? '已取消' : '已中断'} · 已用 ${elapsed} 秒`;
     }
     $('#progress-estimate').textContent = progressCopy;
-    $('[data-action="run-repair"]').disabled = running || !state.image || !maskHasPixels();
+    $('[data-action="run-repair"]').disabled = state.running || !state.image || !maskHasPixels() || (isProfessional() && hasUnrestorableRegions());
     $('[data-action="run-repair"]').classList.toggle('hidden', running);
     $('[data-action="cancel-job"]').classList.toggle('hidden', !state.activeJobId);
     $('#resume-button').classList.toggle('hidden', running || !['interrupted', 'failed', 'cancelled'].includes(job.status));
@@ -551,6 +546,32 @@
     $('#event-log').innerHTML = lines.join('') || '<div class="empty-log">生成任务后显示规划、工具调用与检查结果。</div>';
     if (running) $('#event-log').scrollTop = $('#event-log').scrollHeight;
     renderCandidates(job);
+  }
+
+  function renderBatchJobs(jobs = state.lastSnapshot?.jobs || []) {
+    const panel = $('#batch-jobs');
+    panel.classList.toggle('hidden', !state.batchJobIds.length);
+    const batch = state.batchJobIds.map(id => jobs.find(job => job.id === id)).filter(Boolean);
+    const finished = batch.filter(job => !ACTIVE.includes(job.status)).length;
+    $('#batch-summary').textContent = `本批次 ${state.batchJobIds.length} 项 · ${finished} 项已结束`;
+    const labels = { queued: '排队中', planning: '规划中', running: '修复中', evaluating: '质量检查',
+      review: '等待复核', failed: '失败', cancelled: '已取消', interrupted: '已中断' };
+    $('#batch-job-list').innerHTML = batch.map((job, index) =>
+      `<button class="button batch-job ${job.id === state.job?.id ? 'active' : ''}" data-batch-job="${job.id}" aria-pressed="${job.id === state.job?.id}">第 ${index + 1} 项 · ${escapeHtml(labels[job.status] || job.status)}</button>`).join('');
+    $$('[data-batch-job]').forEach(button => button.addEventListener('click', () => selectBatchJob(button.dataset.batchJob).catch(notifyError)));
+  }
+
+  async function selectBatchJob(identifier) {
+    const job = (state.lastSnapshot?.jobs || []).find(item => item.id === identifier);
+    if (!job || job.image_id !== state.image?.id) return;
+    state.job = job; state.candidate = null;
+    $('#review-note').value = job.review?.note || '';
+    $('#archive-hypothesis').checked = Boolean(job.review?.archive_as_hypothesis || job.mode === 'speculative');
+    $$('input[name="review-decision"]').forEach(input => { input.checked = input.value === job.review?.decision; });
+    showPage('workbench'); showView('results');
+    renderJob(job); renderBatchJobs();
+    await installMask(job.mask_file_url, job.id);
+    await refresh();
   }
 
   function renderCandidates(job) {
@@ -933,14 +954,9 @@
         `<option value="ns" ${selectedMethod === 'ns' ? 'selected' : ''}>Navier–Stokes 细线修补</option>` +
         `<option value="color" ${selectedMethod === 'color' ? 'selected' : ''}>局部色调匹配</option></select></label>` +
         `${hint ? `<small>${escapeHtml(hint)}</small>` : ''}${statusText ? `<small>${statusText}</small>` : ''}</div>` +
-        `<div class="damage-item-actions"><label class="damage-confirm"><input type="checkbox" data-confirm-defect="${index}" ${item.confirmed ? 'checked' : ''} ${disabled ? 'disabled' : ''}>确认</label>` +
-        `<button class="button" data-run-defect="${index}" ${disabled ? 'disabled' : ''}>运行修复</button></div></div>`;
+        `<div class="damage-item-actions"><button class="button" data-run-defect="${index}" ${disabled ? 'disabled' : ''}>运行修复</button></div></div>`;
     }).join('');
     $$('[data-damage]').forEach(button => button.addEventListener('click', () => selectDamage(Number(button.dataset.damage))));
-    $$('[data-confirm-defect]').forEach(input => input.addEventListener('change', () => {
-      state.damageItems[Number(input.dataset.confirmDefect)].confirmed = input.checked;
-      renderDamage(limitations);
-    }));
     $$('[data-method-defect]').forEach(select => select.addEventListener('change', () => {
       state.damageItems[Number(select.dataset.methodDefect)].selectedMethod = select.value;
     }));
@@ -965,46 +981,62 @@
     }
     const selected = indexes.map(index => state.damageItems[index]).filter(Boolean);
     if (!selected.length) return toast('没有可运行的缺损项。');
-    const proposalIds = [];
-    const methods = {};
-    const failed = [];
-    for (const item of selected) {
-      if (!item.proposal_id) {
-        try {
-          const made = await invoke('addManualDefect', state.image.id, JSON.stringify({
-            bbox: item.bbox, type: item.type, size: item.size,
-          }));
-          item.proposal_id = made.defect.proposal_id;
-          item.region_class = 'fillable_lacuna';
-          item.repair_allowed = true;
-          item.confirmed = true;
-        } catch (error) {
-          failed.push({ item, error });
-          continue;
-        }
-      }
-      proposalIds.push(item.proposal_id);
-      if (item.selectedMethod && item.selectedMethod !== 'recommended') methods[item.proposal_id] = item.selectedMethod;
-    }
-    if (!proposalIds.length) {
-      notifyError(failed[0]?.error || new Error('没有可运行的缺损项。'));
-      return;
-    }
-    if (failed.length) toast(`${failed.length} 项无法自动生成掩膜，已跳过；其余继续运行。`);
-    const result = await invoke('runDefectRepairs', JSON.stringify({
-      image_id: state.image.id, proposal_ids: proposalIds, confirmed: true, methods,
-      generative_attempt: generativeAttempt,
-    }));
-    const count = result.jobs?.length || 0;
-    if (!count) {
-      toast(result.skipped?.[0]?.reason || '当前没有可运行的缺损项。');
-      return;
-    }
-    hideModal('damage-modal');
-    const skipped = result.skipped?.length ? `；跳过 ${result.skipped.length} 项：${result.skipped[0].reason}` : '';
-    toast(`已启动 ${count} 个修复任务${skipped}。`);
-    await refresh();
+    state.defectSubmitting = true;
+    setBusy(true);
     renderDamage();
+    try {
+      const proposalIds = [];
+      const methods = {};
+      const failed = [];
+      for (const item of selected) {
+        if (!item.proposal_id) {
+          try {
+            const made = await invoke('addManualDefect', state.image.id, JSON.stringify({
+              bbox: item.bbox, type: item.type, size: item.size,
+            }));
+            item.proposal_id = made.defect.proposal_id;
+            item.region_class = 'fillable_lacuna';
+            item.repair_allowed = true;
+            item.confirmed = true;
+          } catch (error) {
+            failed.push({ item, error });
+            continue;
+          }
+        }
+        proposalIds.push(item.proposal_id);
+        if (item.selectedMethod && item.selectedMethod !== 'recommended') methods[item.proposal_id] = item.selectedMethod;
+      }
+      if (!proposalIds.length) {
+        notifyError(failed[0]?.error || new Error('没有可运行的缺损项。'));
+        return;
+      }
+      if (failed.length) toast(`${failed.length} 项无法自动生成掩膜，已跳过；其余继续运行。`);
+      const result = await invoke('runDefectRepairs', JSON.stringify({
+        image_id: state.image.id, proposal_ids: proposalIds, methods,
+        generative_attempt: generativeAttempt,
+      }));
+      const count = result.jobs?.length || 0;
+      if (!count) {
+        toast(result.skipped?.[0]?.reason || '当前没有可运行的缺损项。');
+        return;
+      }
+      hideModal('damage-modal');
+      state.batchJobIds = result.jobs.map(job => job.id);
+      state.job = result.jobs[0]; state.candidate = null;
+      state.activeJobId = result.jobs.find(job => ACTIVE.includes(job.status))?.id || null;
+      $('#review-note').value = '';
+      $('#archive-hypothesis').checked = generativeAttempt;
+      $$('input[name="review-decision"]').forEach(input => { input.checked = false; });
+      showPage('workbench'); showView('results');
+      renderJob(state.job); renderBatchJobs(result.jobs);
+      await installMask(state.job.mask_file_url, state.job.id);
+      const skipped = result.skipped?.length ? `；跳过 ${result.skipped.length} 项：${result.skipped[0].reason}` : '';
+      toast(`已启动 ${count} 个修复任务${skipped}。`);
+    } finally {
+      state.defectSubmitting = false;
+      await refresh();
+      renderDamage();
+    }
   }
 
   async function selectDamage(index) {
