@@ -61,7 +61,8 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
     from .planner import Budget
     from .imaging import mask_array
     from .professional import (WORKFLOW_PROFESSIONAL, normalize_workflow, normalize_mask_source,
-                               validate_professional_create, enforce_mode_and_risk)
+                               validate_professional_create, enforce_mode_and_risk,
+                               job_confirmation_flags)
     from .risk_regions import derive_risk_flags
     available = engine.tools.availability()
     workflow = normalize_workflow(workflow)
@@ -172,9 +173,10 @@ def create_job(store, engine, image_record, mask_record, backend, planner, count
            'evidence_level': professional_meta.get('evidence_level'),
            'expert_notes': professional_meta.get('expert_notes') or '',
            'mask_source': professional_meta.get('mask_source') or 'manual',
-           'allow_enhanced': bool(professional_meta.get('allow_enhanced') or (mode == 'enhanced' and allow_enhanced)),
-           'risk_acknowledged': bool(professional_meta.get('risk_acknowledged')),
-           'mask_gate_confirmed': bool(professional_meta.get('mask_gate_confirmed')),
+           **job_confirmation_flags(
+               professional_meta, mode=mode, allow_enhanced=allow_enhanced,
+               risk_acknowledged=risk_acknowledged, mask_gate_confirmed=mask_gate_confirmed,
+               allow_generative_attempt=allow_generative_attempt),
            'has_unrestorable': bool(risk_flags['has_unrestorable']),
            'has_uncertain': bool(risk_flags['has_uncertain']),
            'force_override': bool(force_override) if risk_flags['has_uncertain'] else False,

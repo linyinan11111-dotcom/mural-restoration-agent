@@ -31,6 +31,19 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+def select_full_generation_backend(available):
+    """Choose the full-image backend before checking its dependencies.
+
+    Cloud image generation does not need a local diffusion install. Local
+    diffusion is required only when that backend is the one that will run.
+    """
+    if available.get('imagine'):
+        return 'imagine'
+    if available.get('diffusion'):
+        return 'diffusion'
+    raise ValueError('全图 AI 生成需要已配置云端生图，或已安装本地扩散模型（models/sd-inpainting）。')
+
+
 class Bridge(QObject):
     notify = Signal(str)
     auxCompleted = Signal()
@@ -194,8 +207,7 @@ class Bridge(QObject):
             if not image:
                 raise ValueError('图像记录不存在。')
             available = self.engine.tools.availability()
-            if not available.get('diffusion'):
-                raise ValueError('全图 AI 生成需要已安装扩散模型（models/sd-inpainting）。')
+            backend = select_full_generation_backend(available)
             with Image.open(self.store.folder(image['id']) / 'image.png') as source:
                 source = source.convert('RGB')
                 width, height = source.size
@@ -208,15 +220,12 @@ class Bridge(QObject):
             mask_record = workspace.add_mask(
                 self.store, image, buffer.getvalue(), mask_source='manual',
                 user_confirmed=True, region_class='fillable_lacuna')
-            cloud_ready = bool(available.get('imagine'))
-            if cloud_ready:
+            if backend == 'imagine':
                 from .imagine import FULL_REDRAW_PROMPT
-                backend = 'imagine'
                 instructions = FULL_REDRAW_PROMPT
                 structure = False
             else:
                 from .professional import FULL_GENERATION_PROMPT
-                backend = 'diffusion'
                 instructions = FULL_GENERATION_PROMPT
                 structure = bool(available.get('controlnet'))
             job = workspace.create_job(
