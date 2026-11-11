@@ -392,3 +392,175 @@ def test_merge_proposal_and_aux_version_contract(window, qt_app):
     window.bridge.aux = {'status': 'done', 'result': {'notice': 'x'}}
     window.bridge.aux_version += 1
     assert json.loads(window.bridge.snapshot())['aux_version'] == version + 1
+
+
+def load_plain_fixture(window, qt_app):
+    """Use a flat test image; these regressions never invoke a generation model."""
+    from mural_agent import workspace
+    record = workspace.add_image(window.store, png(np.full((240, 320, 3), 160, np.uint8)), 'ui-fixture.png')
+    exposed = window.bridge._image(record)
+    assert run_js(window, f'window.__shibui.loadImage({json.dumps(exposed)}); true') is True
+    assert wait_until(qt_app, lambda: run_js(window, "document.querySelector('#mask-canvas').width") == 320)
+    assert wait_until(qt_app, lambda: run_js(window, "document.querySelector('#mask-canvas').getBoundingClientRect().width > 0") is True)
+    return record
+
+
+def pointer_stroke(window, tool, start=(0.4, 0.4), end=None, size=20):
+    # Exercise the shipped pointer handlers, including pointerup/replay and undo.
+    script = """(() => {
+      const tool = TOOL;
+      const button = document.querySelector(`[data-tool="${tool}"]`);
+      if (button) button.click(); else window.__shibui.state.tool = tool;
+      const c = document.querySelector('#mask-canvas'), r = c.getBoundingClientRect();
+      window.__shibui.state.brushSize = SIZE * r.width / c.width;
+      const fire = (type, point, buttons) => c.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, pointerId: 1, pointerType: 'mouse', button: 0, buttons,
+        clientX: r.left + r.width * point[0], clientY: r.top + r.height * point[1] }));
+      fire('pointerdown', START, 1);
+      if (END) fire('pointermove', END, 1);
+      fire('pointerup', END || START, 0);
+      return true;
+    })()"""
+    script = (script.replace('TOOL', json.dumps(tool)).replace('SIZE', str(size))
+              .replace('START', json.dumps(start)).replace('END', json.dumps(end)))
+    assert run_js(window, script) is True
+
+
+def risk_pixel(window, x=128, y=96):
+    return json.loads(run_js(window, f"JSON.stringify([...document.querySelector('#region-canvas').getContext('2d').getImageData({x}, {y}, 1, 1).data])"))
+
+
+@pytest.mark.parametrize('tool', ['uncertain', 'uncertainty'])
+def test_uncertain_strokes_use_the_uncertain_gate_even_when_overdrawn(window, qt_app, tool):
+    load_plain_fixture(window, qt_app)
+    pointer_stroke(window, 'brush', start=(0.65, 0.65))
+    for _ in range(3):
+        pointer_stroke(window, tool)
+    assert risk_pixel(window)[3] > 0
+    assert run_js(window, "document.querySelector('#force-override').closest('label').style.display !== 'none'") is True
+    assert run_js(window, "document.querySelector('[data-action=\"run-repair\"]').disabled") is False
+    # Without expert override it must stop at the uncertain gate, not at the
+    # unrestorable gate. With override it must transmit the correct categories.
+    run_js(window, "document.querySelector('#mask-gate-confirmed').checked = true; document.querySelector('[data-action=\"run-repair\"]').click(); true")
+    assert '专家强制放行' in run_js(window, "document.querySelector('#toast').textContent")
+    run_js(window, """window.__shibui.state.bridge.createJob = (request, callback) => {
+      window.__capturedRequest = JSON.parse(request); callback('{"error":"fixture: no execution"}');
+    };
+    document.querySelector('#force-override').checked = true;
+    document.querySelector('#force-override-reason').value = 'Regression fixture expert review';
+    document.querySelector('[data-action="run-repair"]').click(); true""")
+    assert wait_until(qt_app, lambda: run_js(window, 'Boolean(window.__capturedRequest)') is True)
+    request = json.loads(run_js(window, 'JSON.stringify(window.__capturedRequest)'))
+    assert request['has_uncertain'] is True
+    assert request['has_unrestorable'] is False
+    assert window.store.list('job') == []
+
+
+def test_unrestorable_strokes_still_block_repair_after_refresh(window, qt_app):
+    load_plain_fixture(window, qt_app)
+    pointer_stroke(window, 'brush')
+    pointer_stroke(window, 'unrestorable')
+    run_js(window, "window.__shibui.refresh(); true")
+    assert run_js(window, "document.querySelector('[data-action=\"run-repair\"]').disabled") is True
+    assert run_js(window, "document.querySelector('#force-override').closest('label').style.display") == 'none'
+
+
+def test_damage_list_has_no_ineffective_confirmation_checkbox(window, qt_app):
+    load_plain_fixture(window, qt_app)
+    run_js(window, """window.__shibui.state.damageItems = [
+      {bbox: [100, 100, 200, 200], type: 'crack', confirmed: false},
+      {bbox: [300, 300, 400, 400], type: 'paint_loss', confirmed: true}
+    ]; window.__shibui.renderDamage(); true""")
+    assert run_js(window, "document.querySelectorAll('[data-confirm-defect], .damage-confirm').length") == 0
+    assert run_js(window, "document.querySelectorAll('[data-run-defect]:not(:disabled)').length") == 2
+    assert run_js(window, "document.querySelector('[data-action=\"run-all-defects\"]').disabled") is False
+
+
+@pytest.mark.parametrize('tool', ['uncertain', 'unrestorable'])
+def test_eraser_removes_risk_and_mask_pixels_with_ordered_undo(window, qt_app, tool):
+    load_plain_fixture(window, qt_app)
+    pointer_stroke(window, 'brush', start=(0.3, 0.4), end=(0.5, 0.4))
+    pointer_stroke(window, tool, start=(0.3, 0.4), end=(0.5, 0.4))
+    assert risk_pixel(window)[3] > 0
+    pointer_stroke(window, 'eraser', start=(0.25, 0.4), end=(0.55, 0.4), size=50)
+    assert risk_pixel(window)[3] == 0
+    mask = base64.b64decode(run_js(window, 'window.__shibui.exportMaskBase64()'))
+    assert np.asarray(Image.open(BytesIO(mask)).convert('L')).max() == 0
+    assert run_js(window, "document.querySelector('#force-override').closest('label').style.display") == 'none'
+
+    # Later unrelated strokes/redraws must not resurrect erased red regions.
+    pointer_stroke(window, 'brush', start=(0.8, 0.8))
+    assert risk_pixel(window)[3] == 0
+    run_js(window, "document.querySelector('[data-action=\"undo\"]').click(); true")
+    assert risk_pixel(window)[3] == 0
+    run_js(window, "document.querySelector('[data-action=\"undo\"]').click(); true")
+    assert risk_pixel(window)[3] > 0
+    mask = base64.b64decode(run_js(window, 'window.__shibui.exportMaskBase64()'))
+    assert np.asarray(Image.open(BytesIO(mask)).convert('L'))[96, 128] == 255
+    # A new stroke after the eraser/undo sequence is classified by its own type.
+    pointer_stroke(window, 'uncertain', start=(0.3, 0.4), end=(0.5, 0.4), size=40)
+    assert run_js(window, "document.querySelector('#force-override').closest('label').style.display !== 'none'") is True
+    assert run_js(window, "document.querySelector('[data-action=\"run-repair\"]').disabled") is False
+
+
+@pytest.mark.parametrize('count', [1, 2])
+def test_defect_launch_selects_task_and_exposes_batch_results(window, qt_app, monkeypatch, count):
+    image = load_plain_fixture(window, qt_app)
+    # Hold all tasks queued: this tests UI state/cancellation without repairing
+    # or generating a mural, and keeps the observation independent of timing.
+    submitted = []
+    monkeypatch.setattr(window.engine, 'submit', lambda identifier: submitted.append(identifier))
+    defects = []
+    for i in range(count):
+        made = json.loads(window.bridge.addManualDefect(image['id'], json.dumps({
+            'bbox': [100 + i*250, 100, 200 + i*250, 200], 'type': 'manual', 'size': 'small'})))
+        assert 'error' not in made, made
+        defects.append(made['defect'])
+    run_js(window, f"window.__shibui.state.damageItems = {json.dumps(defects)}; window.__shibui.renderDamage(); document.querySelector('[data-action=\"open-damage-list\"]').click(); true")
+    assert run_js(window, "document.querySelectorAll('[data-confirm-defect], .damage-confirm').length") == 0
+    action = '[data-run-defect="0"]' if count == 1 else '[data-action="run-all-defects"]'
+    assert run_js(window, f'document.querySelector({json.dumps(action)}).click(); true') is True
+    assert wait_until(qt_app, lambda: len(submitted) == count)
+    assert wait_until(qt_app, lambda: run_js(window, 'Boolean(window.__shibui.state.job)') is True)
+    first = submitted[0]
+    assert run_js(window, 'window.__shibui.state.job.id') == first
+    assert run_js(window, "document.querySelector('#results-view').classList.contains('active')") is True
+    assert run_js(window, "document.querySelector('#job-status').textContent") == '排队中'
+    assert run_js(window, "document.querySelector('[data-action=\"cancel-job\"]').getBoundingClientRect().height > 0") is True
+    assert run_js(window, "document.querySelectorAll('[data-batch-job]').length") == count
+    assert run_js(window, "document.querySelectorAll('[data-batch-job]:disabled').length") == 0
+    assert run_js(window, "document.querySelector('#damage-modal').classList.contains('hidden')") is True
+
+    # Inject a finished fixture candidate: polling must display it automatically.
+    candidate = {'id': new_id(), 'job_id': first, 'tool': 'telea', 'metrics': {}, 'versions': {'device': 'fixture'}}
+    for name in ('result.png', 'difference.png'):
+        Image.new('RGB', (320, 240), 'gray').save(window.store.folder(candidate['id']) / name)
+    window.store.put('candidate', candidate)
+    window.store.update('job', first, status='review', progress=100, candidates=[candidate])
+    run_js(window, 'window.__shibui.refresh(); true')
+    assert wait_until(qt_app, lambda: run_js(window, 'window.__shibui.state.candidate?.id || null') == candidate['id'])
+    assert run_js(window, "document.querySelectorAll('#comparison-stage img').length") >= 1
+    assert run_js(window, "document.querySelector('#job-status').textContent") == '等待复核'
+    if count == 1:
+        # Re-running from an already displayed result must select the new task,
+        # clearing the previous candidate rather than leaving it on screen.
+        run_js(window, "document.querySelector('[data-action=\"open-damage-list\"]').click(); document.querySelector('[data-run-defect=\"0\"]').click(); true")
+        assert wait_until(qt_app, lambda: len(submitted) == 2)
+        assert wait_until(qt_app, lambda: run_js(window, 'window.__shibui.state.job.id') == submitted[1])
+        assert run_js(window, 'window.__shibui.state.candidate === null') is True
+        assert run_js(window, "document.querySelector('#job-status').textContent") == '排队中'
+    if count == 2:
+        second = submitted[1]
+        run_js(window, f'document.querySelector(\'[data-batch-job="{second}"]\').click(); true')
+        assert wait_until(qt_app, lambda: run_js(window, 'window.__shibui.state.job.id') == second)
+        assert wait_until(qt_app, lambda: run_js(window, 'window.__shibui.state.activeJobId') == second)
+        assert run_js(window, 'window.__shibui.state.candidate === null') is True
+        assert run_js(window, "document.querySelector('#job-status').textContent") == '排队中'
+        run_js(window, "document.querySelector('[data-action=\"cancel-job\"]').click(); true")
+        assert wait_until(qt_app, lambda: window.store.get('job', second)['cancel_requested'])
+        assert window.store.get('job', first)['cancel_requested'] is False
+        window.store.update('job', second, status='cancelled')
+        run_js(window, 'window.__shibui.refresh(); true')
+        assert wait_until(qt_app, lambda: run_js(window, "document.querySelector('#batch-summary').textContent") == '本批次 2 项 · 2 项已结束')
+        run_js(window, f'document.querySelector(\'[data-batch-job="{first}"]\').click(); true')
+        assert wait_until(qt_app, lambda: run_js(window, 'window.__shibui.state.candidate?.id || null') == candidate['id'])

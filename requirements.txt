@@ -6,6 +6,7 @@ numpy>=2,<3
 opencv-python-headless>=4.11,<5
 scikit-image>=0.26,<0.28
 httpx>=0.28,<1
+pydantic>=2,<3
 PySide6-Essentials>=6.8,<7
 PySide6-Addons>=6.8,<7
 PySide6-WebEngine>=6.8,<7
