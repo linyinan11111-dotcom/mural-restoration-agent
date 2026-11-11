@@ -11,7 +11,8 @@ from mural_agent.config import Settings
 from mural_agent.storage import Store
 from mural_agent.engine import Engine
 from mural_agent.planner import rule_plan
-from mural_agent.quality import paired_metrics
+from mural_agent.imaging import composite
+from mural_agent.quality import assess, paired_metrics
 from mural_agent.backup import backup_workspace, restore_workspace
 
 
@@ -131,6 +132,102 @@ def test_registration_requires_provenance_review_and_exact_coverage(system):
     weak = references.add_reference(store, png(image), 'weak', metadata)
     with pytest.raises(ValueError, match='同题材'):
         references.register(store, record, weak, mask)
+
+
+def test_thick_mask_score_ranks_the_edited_band_not_only_the_preserved_edge():
+    """Black, matching gray, and white fills of one thick hole must not tie.
+
+    The preserved outer ring makes the edge statistic identical. The score
+    has to look at the band that was actually blended, and the fill closer
+    to the surrounding paint ranks above the worse fills (lower score).
+    """
+    surround = np.array([90, 110, 130], np.uint8)
+    clean = np.empty((48, 48, 3), np.uint8)
+    clean[:] = surround
+    mask = np.zeros((48, 48), np.uint8)
+    mask[14:34, 14:34] = 255
+    damaged = clean.copy()
+    damaged[mask > 0] = (16, 16, 16)
+    fills = {
+        'black': np.zeros_like(damaged),
+        'gray': clean.copy(),
+        'white': np.full_like(damaged, 255),
+    }
+    scores, edges, bands, maes = {}, {}, {}, {}
+    for name, prediction in fills.items():
+        output = composite(damaged, prediction, mask)
+        metrics = assess(damaged, output, mask)
+        scores[name] = metrics['score']
+        edges[name] = metrics['boundary_pair_delta']
+        bands[name] = metrics['edited_band_delta']
+        maes[name] = paired_metrics(clean, output, mask)['mask_mae']
+    assert len(set(edges.values())) == 1
+    assert len(set(scores.values())) == 3
+    assert scores['gray'] < scores['black']
+    assert scores['gray'] < scores['white']
+    assert bands['gray'] < bands['black']
+    assert bands['gray'] < bands['white']
+    assert maes['gray'] < maes['black']
+    assert maes['gray'] < maes['white']
+
+
+def test_mixed_mask_composite_and_score_distinguish_repairs():
+    """Compositing and scoring together: a crack beside a hole is repaired, and two fills differ."""
+    surround = np.array([40, 80, 120], np.uint8)
+    damaged = np.empty((64, 96, 3), np.uint8)
+    damaged[:] = surround
+    mask = np.zeros((64, 96), np.uint8)
+    mask[8, 4:44] = 255
+    mask[28:48, 60:80] = 255
+    damaged[mask > 0] = (210, 200, 180)
+    good = np.empty_like(damaged)
+    good[:] = surround
+    bad = np.full_like(damaged, 255)
+    good_out = composite(damaged, good, mask)
+    bad_out = composite(damaged, bad, mask)
+    assert np.all(good_out[8, 4:44] == surround)
+    assert np.all(bad_out[8, 4:44] == 255)
+    assert np.all(good_out[38, 70] == surround)
+    assert np.array_equal(good_out[mask == 0], damaged[mask == 0])
+    assert np.array_equal(bad_out[mask == 0], damaged[mask == 0])
+    good_metrics = assess(damaged, good_out, mask)
+    bad_metrics = assess(damaged, bad_out, mask)
+    assert good_metrics['edited_band_delta'] < bad_metrics['edited_band_delta']
+    assert good_metrics['score'] != bad_metrics['score']
+    assert good_metrics['score'] < bad_metrics['score']
+
+
+def test_engine_recommends_the_better_thick_fill(system, monkeypatch):
+    store, engine = system
+    surround = np.array([90, 110, 130], np.uint8)
+    image = np.empty((48, 48, 3), np.uint8)
+    image[:] = surround
+    mask = np.zeros((48, 48), np.uint8)
+    mask[14:34, 14:34] = 255
+    image[mask > 0] = (16, 16, 16)
+    record = workspace.add_image(store, png(image), 'hole.png')
+    saved = workspace.add_mask(store, record, png(mask))
+    fills = [
+        np.zeros_like(image),
+        np.broadcast_to(surround, image.shape).copy(),
+        np.full_like(image, 255),
+    ]
+
+    def tool(step, original, active, job, folder, timeout):
+        return fills.pop(0), {'device': 'cpu'}
+
+    monkeypatch.setattr(engine.tools, 'execute', tool)
+    result = wait(store, workspace.create_job(store, engine, record, saved, 'opencv', 'rules', 3, ''))
+    assert result['status'] == 'review'
+    scores = [candidate['metrics']['score'] for candidate in result['candidates']]
+    edges = [candidate['metrics']['boundary_pair_delta'] for candidate in result['candidates']]
+    assert len(set(edges)) == 1
+    assert len(set(scores)) == 3
+    assert scores[1] < scores[0] and scores[1] < scores[2]
+    # The preserved edge still fails the boundary check for every fill.
+    # Ranking has to come from the edited-band score, not from candidate order.
+    assert all(not candidate['metrics']['passed'] for candidate in result['candidates'])
+    assert result['recommended_id'] == result['candidates'][1]['id']
 
 
 def test_paired_metrics_are_region_scoped():

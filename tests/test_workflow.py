@@ -128,6 +128,45 @@ def test_thick_mask_composite_feathers_boundary_not_interior():
     assert np.all(result[18:22, 18:22] == 220)
 
 
+def test_mixed_mask_keeps_fine_crack_when_a_thick_hole_is_present():
+    """A 40 px crack stays repaired when the same mask also has a 20x20 hole.
+
+    Feathering used to take the mask-wide maximum thickness, so the hole
+    drove the crack's blend weight to zero (0/40 after a perfect prediction
+    had repaired 40/40 alone). Local thickness keeps the crack, including
+    when the crack touches the hole, and the hole center still takes the fill.
+    """
+    surround = np.array([30, 60, 90], np.uint8)
+    damage = np.array([214, 206, 190], np.uint8)
+    fill = np.array([12, 180, 48], np.uint8)
+
+    def scene(mask):
+        image = np.empty(mask.shape + (3,), np.uint8)
+        image[:] = surround
+        image[mask > 0] = damage
+        prediction = np.empty_like(image)
+        prediction[:] = fill
+        return image, prediction
+
+    separate = np.zeros((64, 96), np.uint8)
+    separate[8, 4:44] = 255
+    separate[28:48, 60:80] = 255
+    original, prediction = scene(separate)
+    result = composite(original, prediction, separate)
+    assert np.array_equal(result[separate == 0], original[separate == 0])
+    assert np.all(result[8, 4:44] == fill)
+    assert np.all(result[38, 70] == fill)
+
+    attached = np.zeros((64, 96), np.uint8)
+    attached[20, 4:44] = 255
+    attached[16:36, 44:64] = 255
+    original, prediction = scene(attached)
+    result = composite(original, prediction, attached)
+    assert np.array_equal(result[attached == 0], original[attached == 0])
+    assert np.all(result[20, 4:36] == fill)
+    assert np.all(result[26, 54] == fill)
+
+
 def test_export_blocks_rejected_and_unflagged_hypothesis(workbench):
     client, app = workbench
     image, mask_record, *_ = upload_case(client)

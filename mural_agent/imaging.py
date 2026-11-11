@@ -8,6 +8,11 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 MAX_PIXELS = 20_000_000
 MAX_BYTES = 35 * 1024 * 1024
+# Inscribed radius below which a stroke is a hairline and must be replaced in full.
+# The thick core is this far inside a hole; growing it a few steps reaches that
+# hole's own feather band and stops, so a crack in the same mask keeps weight 1.
+_THICK_CORE = 4.0
+_CORE_REACH = 5
 
 
 def decode_image(payload: bytes, mask=False) -> Image.Image:
@@ -49,6 +54,36 @@ def mask_array(path):
         return (np.asarray(image.convert('L')) > 127).astype(np.uint8) * 255
 
 
+def blend_alpha(mask):
+    """Prediction weight for each pixel. 0 keeps the original, 1 takes the fill.
+
+    Thickness is local. A hairline is replaced at full strength even when the
+    same mask also contains a thick hole; only that hole's own boundary is
+    feathered. Using the mask-wide maximum radius previously drove a 1 px
+    crack's weight to zero whenever any thick region was present.
+    """
+    active = np.asarray(mask) > 0
+    alpha = np.zeros(active.shape, np.float32)
+    if not active.any():
+        return alpha
+    distance = cv2.distanceTransform(active.astype(np.uint8), cv2.DIST_L2, 3)
+    if float(distance[active].max()) < _THICK_CORE:
+        alpha[active] = 1
+        return alpha
+    # Start from full strength, then feather only the neighborhood of the thick
+    # core. Dilation stays inside the mask, so it cannot jump a gap onto a
+    # separate crack, and a short reach cannot swallow an attached hairline.
+    alpha[active] = 1
+    zone = (distance >= _THICK_CORE).astype(np.uint8)
+    limit = active.astype(np.uint8)
+    kernel = np.ones((3, 3), np.uint8)
+    for _ in range(_CORE_REACH):
+        zone = cv2.bitwise_and(cv2.dilate(zone, kernel), limit)
+    thick = zone > 0
+    alpha[thick] = np.clip((distance[thick] - 1.0) / 3.0, 0, 1)
+    return alpha
+
+
 def composite(original, prediction, mask):
     if original.shape != prediction.shape or mask.shape != original.shape[:2]:
         raise ValueError('图像与掩膜尺寸不一致。')
@@ -58,14 +93,7 @@ def composite(original, prediction, mask):
     if not active.any():
         return original.copy()
     output = original.copy()
-    distance = cv2.distanceTransform(active.astype(np.uint8), cv2.DIST_L2, 3)
-    # Thin masks (hairline cracks) must be replaced at full strength; feathering
-    # them would erase most of the repair. Thicker masks blend only in a narrow
-    # boundary band and keep the prediction untouched inside.
-    if float(distance[active].max()) < 4.0:
-        output[active] = np.clip(prediction[active], 0, 255).astype(np.uint8)
-        return output
-    alpha = np.clip((distance - 1.0) / 3.0, 0, 1)[..., None]
+    alpha = blend_alpha(mask)[..., None]
     blended = original.astype(np.float32) * (1 - alpha) + np.asarray(prediction, dtype=np.float32) * alpha
     output[active] = np.clip(blended[active], 0, 255).astype(np.uint8)
     return output
