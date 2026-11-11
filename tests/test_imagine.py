@@ -183,6 +183,43 @@ def test_redraw_sends_the_intact_original_not_a_blanked_mask(tmp_path):
     assert tuple(marked[0, 0]) == (30, 70, 110)
 
 
+def test_url_fetch_to_another_host_does_not_send_the_api_key(tmp_path):
+    """A provider `url` (not b64_json) is a separate download and must not carry the API key."""
+    token = 'sk-test-not-real'
+    settings = _settings(
+        tmp_path,
+        imagine_provider='openai_json',
+        imagine_base_url='https://images.example.test/v1',
+        imagine_model='other-vendor-model',
+        imagine_api_key=token,
+    )
+    calls = []
+
+    def transport(method, url, headers=None, json=None, data=None, files=None, timeout=None):
+        calls.append({
+            'method': method, 'url': url, 'headers': dict(headers or {}),
+            'json': json, 'data': data, 'files': None if files is None else sorted(files),
+        })
+        if len(calls) == 1:
+            return _Response({'data': [{'url': 'https://other-host.example/generated.png'}]})
+        image = Image.new('RGB', (10, 8), (10, 180, 40))
+        buffer = io.BytesIO()
+        image.save(buffer, format='PNG')
+        return _Response({}, content=buffer.getvalue())
+
+    original = np.zeros((8, 10, 3), np.uint8)
+    mask = np.zeros((8, 10), np.uint8)
+    mask[2:5, 3:7] = 255
+    generated, _meta = restore_with_imagine(settings, original, mask, 'fill', transport=transport)
+    assert [call['method'] for call in calls] == ['POST', 'GET']
+    assert calls[0]['url'] == 'https://images.example.test/v1/images/edits'
+    assert calls[0]['headers'].get('Authorization') == f'Bearer {token}'
+    assert calls[1]['url'] == 'https://other-host.example/generated.png'
+    assert token not in repr(calls[1])
+    assert 'authorization' not in {key.lower() for key in calls[1]['headers']}
+    assert generated.shape == original.shape
+
+
 def test_blank_key_is_not_written_over_the_stored_secret():
     from mural_agent.imagine import imagine_env_updates
     kept = imagine_env_updates({

@@ -1,7 +1,36 @@
 """Engineering checks and explicitly scoped, paired-image metrics."""
 import cv2
 import numpy as np
-from .imaging import evaluate
+from .imaging import blend_alpha, evaluate
+
+
+def _nearest_known_colors(image, known):
+    """Color of the nearest unmasked pixel, for every pixel in the image."""
+    src = np.where(known, 0, 255).astype(np.uint8)
+    _distance, labels = cv2.distanceTransformWithLabels(
+        src, cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL)
+    ys = np.zeros(int(labels.max()) + 1, np.int32)
+    xs = np.zeros(int(labels.max()) + 1, np.int32)
+    known_y, known_x = np.where(known)
+    ys[labels[known_y, known_x]] = known_y
+    xs[labels[known_y, known_x]] = known_x
+    return image[ys[labels], xs[labels]]
+
+
+def _edited_band_delta(original, output, mask):
+    """Mean color distance between the actually blended band and nearby original paint.
+
+    Thick-mask feathering leaves the outermost ring equal to the damaged input.
+    Pairs that only cross that preserved edge cannot tell two fills apart, so
+    the score uses pixels whose blend weight is above zero.
+    """
+    band = blend_alpha(mask) > 0
+    known = ~(np.asarray(mask) > 0)
+    if not band.any() or not known.any():
+        return 0.0
+    context = _nearest_known_colors(original, known)
+    difference = output[band].astype(np.float32) - context[band].astype(np.float32)
+    return float(np.mean(np.linalg.norm(difference, axis=-1)))
 
 
 def assess(original, output, mask, thresholds=None):
@@ -22,6 +51,7 @@ def assess(original, output, mask, thresholds=None):
         gradients.extend(np.abs(gray[left] - gray[right])[crossing].tolist())
     metrics['boundary_pair_delta'] = round(float(np.mean(distances)), 3) if distances else 0.
     metrics['boundary_gradient'] = round(float(np.mean(gradients)), 3) if gradients else 0.
+    metrics['edited_band_delta'] = round(_edited_band_delta(original, output, mask), 3)
     metrics['finite'] = bool(np.isfinite(output).all())
     limits = {'boundary_pair_delta': 65., 'boundary_gradient': 45.}
     limits.update(thresholds or {})
@@ -36,8 +66,9 @@ def assess(original, output, mask, thresholds=None):
         if name in metrics and metrics[name] > limit:
             issues.append(name)
     metrics.update(passed=not issues, issues=issues, thresholds=limits,
-                   score=round(metrics['boundary_pair_delta'] + .25 * metrics['boundary_gradient'], 3),
-                   note='边界统计是工程启发式，天然画线可能触发；须人工复核，不衡量历史真实性。')
+                   score=round(metrics['boundary_pair_delta'] + .25 * metrics['boundary_gradient']
+                               + metrics['edited_band_delta'], 3),
+                   note='边界统计是工程启发式，天然画线可能触发；评分同时比较实际改写区域与周围颜色。须人工复核，不衡量历史真实性。')
     return metrics
 
 
