@@ -260,6 +260,20 @@ class Engine:
                     output = composite(original, prediction, mask)
                     self.store.update('job', job_id, status='evaluating')
                     metrics = assess(original, output, mask, job.get('quality_thresholds'))
+                    # The mask argument above is the mask actually composited.
+                    # Enhanced mode expands it; say so, or QA will score the archive
+                    # against the original selection and report false outside edits.
+                    if job.get('mode') == 'enhanced':
+                        metrics['evaluated_mask'] = 'enhanced_work_mask'
+                        metrics['evaluated_mask_file'] = 'enhanced_work_mask.png'
+                        metrics['evaluated_mask_note'] = (
+                            'outside_unchanged 与边界指标对应加强修复实际使用的扩大工作掩膜 '
+                            'enhanced_work_mask.png，不是用户原始 mask.png。')
+                    else:
+                        metrics['evaluated_mask'] = 'original_mask'
+                        metrics['evaluated_mask_file'] = 'mask.png'
+                        metrics['evaluated_mask_note'] = (
+                            'outside_unchanged 与边界指标对应用户原始掩膜 mask.png。')
                     if not metrics['outside_unchanged']:
                         raise RuntimeError('候选未通过掩膜外一致性检查。')
                     folder = self.store.folder(identifier)
@@ -347,6 +361,13 @@ class Engine:
                        if selection['selected_as'] == 'hypothesis' else
                        '数字修复候选；无证据区域不能视为历史原貌。工程评分不是历史真实性概率。')}
         folder = self.store.folder(job_id)
+        work_mask_path = folder / 'enhanced_work_mask.png'
+        has_work_mask = work_mask_path.is_file()
+        manifest['mask_files'] = {
+            'original': 'mask.png',
+            'effective': 'enhanced_work_mask.png' if has_work_mask else 'mask.png',
+            'metrics_correspond_to': 'enhanced_work_mask' if has_work_mask else 'original_mask',
+        }
         archive, temporary = folder/'restoration.zip', folder/'restoration.tmp'
         with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED) as output:
             def add(path, name):
@@ -355,6 +376,8 @@ class Engine:
             add(self.store.folder(image['id'])/'source.bin', 'original/source.bin')
             add(self.store.folder(image['id'])/'image.png', 'original/working.png')
             add(self.store.folder(mask['id'])/'mask.png', 'mask.png')
+            if has_work_mask:
+                add(work_mask_path, 'enhanced_work_mask.png')
             add(self.store.folder(candidate['id'])/'result.png', 'result.png')
             add(self.store.folder(candidate['id'])/'difference.png', 'difference.png')
             for item in job['candidates']:

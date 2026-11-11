@@ -7,6 +7,24 @@ from PIL import Image
 from .imaging import sha256
 
 
+def make_inpaint_condition(image, image_mask):
+    """Build control_v11p_sd15_inpaint conditioning.
+
+    The model card requires an RGB float tensor in ``[0, 1]`` with masked
+    pixels set to ``-1`` (not white ``[1, 1, 1]``). Shape is ``(1, 3, H, W)``,
+    contiguous, so ``torch.from_numpy`` can wrap it without rescaling.
+    Diffusers' control-image processor uses ``do_normalize=False``, which keeps
+    the ``-1`` sentinel.
+    """
+    import numpy as np
+    rgb = np.asarray(image.convert('RGB'), dtype=np.float32) / 255.0
+    mask = np.asarray(image_mask.convert('L'), dtype=np.float32) / 255.0
+    if rgb.shape[:2] != mask.shape[:2]:
+        raise ValueError('image and image_mask must have the same image size')
+    rgb[mask > 0.5] = -1.0
+    return np.ascontiguousarray(rgb.transpose(2, 0, 1)[None])
+
+
 def execute(request):
     output = Path(request['output'])
     if request['tool'] == 'research':
@@ -69,15 +87,12 @@ def execute(request):
                 num_inference_steps=steps, strength=strength, guidance_scale=6.5,
                 generator=torch.Generator('cpu').manual_seed(step['seed']), callback_on_step_end=callback)
     if step.get('structure_control'):
-        import numpy as np
-        control_array = np.asarray(canvas).copy()
         if step.get('full_generation'):
             # Full-image generation keeps the original RGB image as the
             # ControlNet condition so colour/structure are not reduced to edges.
-            control_array = np.asarray(canvas).copy()
+            args['control_image'] = canvas
         else:
-            control_array[np.asarray(mask_canvas) > 127] = 255
-        args['control_image'] = Image.fromarray(control_array)
+            args['control_image'] = torch.from_numpy(make_inpaint_condition(canvas, mask_canvas))
     result = pipe(**args)
     if result.nsfw_content_detected and any(result.nsfw_content_detected):
         raise RuntimeError('模型安全检查未通过，未保存生成结果。')

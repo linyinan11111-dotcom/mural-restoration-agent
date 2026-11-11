@@ -394,6 +394,41 @@ def test_merge_proposal_and_aux_version_contract(window, qt_app):
     assert json.loads(window.bridge.snapshot())['aux_version'] == version + 1
 
 
+def test_ordinary_speculative_mode_shows_required_confirmations(window, qt_app):
+    """P2-6: ordinary speculative mode must show risk and mask confirmation.
+
+    Previously the risk checkbox was hidden unless enhanced mode or the
+    experimental generative switch was on, so the user could not supply the
+    acknowledgement execution requires.
+    """
+    script = """(() => {
+      const probe = (professional, mode) => {
+        const step = document.querySelector('#professional-step');
+        step.checked = professional;
+        step.dispatchEvent(new Event('change'));
+        const select = document.querySelector('#repair-mode');
+        select.value = mode;
+        select.dispatchEvent(new Event('change'));
+        const shown = (id) => document.querySelector(id).closest('label').style.display !== 'none';
+        return { risk: shown('#risk-ack'), gate: shown('#mask-gate-confirmed'),
+                 enhanced: shown('#allow-enhanced') };
+      };
+      return JSON.stringify({
+        professionalSpeculative: probe(true, 'speculative'),
+        standardSpeculative: probe(false, 'speculative'),
+        professionalConservative: probe(true, 'conservative'),
+        standardConservative: probe(false, 'conservative'),
+        professionalEnhanced: probe(true, 'enhanced'),
+      });
+    })()"""
+    shown = json.loads(run_js(window, script))
+    assert shown['professionalSpeculative'] == {'risk': True, 'gate': True, 'enhanced': False}
+    assert shown['standardSpeculative'] == {'risk': True, 'gate': True, 'enhanced': False}
+    assert shown['professionalConservative'] == {'risk': False, 'gate': True, 'enhanced': False}
+    assert shown['standardConservative'] == {'risk': False, 'gate': False, 'enhanced': False}
+    assert shown['professionalEnhanced'] == {'risk': True, 'gate': True, 'enhanced': True}
+
+
 def load_plain_fixture(window, qt_app):
     """Use a flat test image; these regressions never invoke a generation model."""
     from mural_agent import workspace

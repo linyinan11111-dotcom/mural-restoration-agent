@@ -107,6 +107,39 @@ def require_rationale(text, *, label='依据'):
     return rationale[:2000]
 
 
+def _requires_risk_acknowledgement(*, mode=None, level=None, allow_generative_attempt=False):
+    """Enhanced, speculative, and the experimental generative path all re-check this flag."""
+    return (
+        mode in {'enhanced', 'speculative'}
+        or level in {'enhanced', 'speculative'}
+        or bool(allow_generative_attempt)
+    )
+
+
+def job_confirmation_flags(professional_meta, *, mode, allow_enhanced, risk_acknowledged,
+                           mask_gate_confirmed, allow_generative_attempt=False):
+    """Flags stored on the job. Execution reads these same fields.
+
+    Standard jobs do not go through ``validate_professional_create``, so a
+    missing key must keep the confirmation that already passed creation.
+    Storing False there creates a job that is guaranteed to fail before it runs.
+    When the professional validator returns a flag, that value wins: conservative
+    professional jobs still persist mask confirmation, and ordinary speculative
+    jobs keep risk acknowledgement.
+    """
+    needs_gate = _requires_risk_acknowledgement(
+        mode=mode, allow_generative_attempt=allow_generative_attempt)
+    flags = {
+        'allow_enhanced': bool(allow_enhanced) if mode == 'enhanced' else False,
+        'risk_acknowledged': bool(risk_acknowledged) if needs_gate else False,
+        'mask_gate_confirmed': bool(mask_gate_confirmed) if needs_gate else False,
+    }
+    for key in flags:
+        if key in (professional_meta or {}):
+            flags[key] = bool(professional_meta[key])
+    return flags
+
+
 def validate_professional_create(mask_record, *, rationale, evidence_level, mode,
                                  expert_notes='', mask_source=None, allow_enhanced=False,
                                  risk_acknowledged=False, mask_gate_confirmed=False,
@@ -142,6 +175,8 @@ def validate_professional_create(mask_record, *, rationale, evidence_level, mode
     if mode == 'speculative' or level == 'speculative':
         if mode != 'speculative' or level != 'speculative':
             raise ValueError('专业分步：推测修复须同时将修复模式与证据等级设为 speculative，并写明理由。')
+        if not risk_acknowledged:
+            raise ValueError('专业分步：推测性补全须勾选风险提示已知悉。')
         require_rationale(rationale, label='推测理由')
     # Enhanced sits between conservative and speculative; requires explicit opt-in.
     if mode == 'enhanced' or level == 'enhanced':
@@ -170,7 +205,11 @@ def validate_professional_create(mask_record, *, rationale, evidence_level, mode
         'expert_notes': notes,
         'mask_source': source,
         'allow_enhanced': bool(allow_enhanced) if level == 'enhanced' else False,
-        'risk_acknowledged': bool(risk_acknowledged) if (level == 'enhanced' or allow_generative_attempt) else False,
+        # Ordinary speculative (not only the experimental generative switch) must
+        # keep the acknowledgement. Dropping it here makes execution reject a job
+        # that creation just accepted.
+        'risk_acknowledged': bool(risk_acknowledged) if _requires_risk_acknowledgement(
+            mode=mode, level=level, allow_generative_attempt=allow_generative_attempt) else False,
         'mask_gate_confirmed': True,
         'has_unrestorable': bool(flags['has_unrestorable']),
         'has_uncertain': bool(flags['has_uncertain']),

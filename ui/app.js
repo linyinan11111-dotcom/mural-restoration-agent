@@ -98,12 +98,18 @@
     if (note) note.style.opacity = on ? '1' : '.72';
     const mode = $('#repair-mode')?.value || 'conservative';
     const generative = Boolean($('#allow-generative-attempt')?.checked);
+    // Enhanced and ordinary speculative both re-check these flags at runtime.
+    // Hiding them leaves a job that cannot be confirmed, or one that is created
+    // and then rejected before it runs.
+    const needsRisk = generative || mode === 'enhanced' || mode === 'speculative';
+    const needsEnhanced = mode === 'enhanced';
+    const needsMaskGate = on || needsRisk;
     const riskAck = $('#risk-ack')?.closest('label');
-    if (riskAck) riskAck.style.display = on && (mode === 'enhanced' || generative) ? '' : 'none';
+    if (riskAck) riskAck.style.display = needsRisk ? '' : 'none';
     const allowEnhanced = $('#allow-enhanced')?.closest('label');
-    if (allowEnhanced) allowEnhanced.style.display = on && mode === 'enhanced' ? '' : 'none';
+    if (allowEnhanced) allowEnhanced.style.display = needsEnhanced ? '' : 'none';
     const maskGate = $('#mask-gate-confirmed')?.closest('label');
-    if (maskGate) maskGate.style.display = on ? '' : 'none';
+    if (maskGate) maskGate.style.display = needsMaskGate ? '' : 'none';
     syncRegionUi();
   };
   const fileUrl = (value) => value || '';
@@ -399,6 +405,7 @@
         if ($('#repair-mode').value !== 'speculative' || $('#evidence-level').value !== 'speculative') {
           return toast('专业分步：推测须同时将修复模式与证据等级设为 speculative。');
         }
+        if (!$('#risk-ack')?.checked) return toast('专业分步：推测性补全须勾选风险提示已知悉。');
       }
       if (!generative && ($('#repair-mode').value === 'enhanced' || $('#evidence-level').value === 'enhanced')) {
         if ($('#repair-mode').value !== 'enhanced' || $('#evidence-level').value !== 'enhanced') {
@@ -414,6 +421,18 @@
     }
     if (generative && !$('#risk-ack')?.checked) {
       return toast('AI 尝试性补全须勾选风险提示：结果是推测，不是历史原貌。');
+    }
+    if (!isProfessional() && !generative) {
+      const requestedMode = $('#repair-mode')?.value || 'conservative';
+      if (requestedMode === 'enhanced' || requestedMode === 'speculative') {
+        if (!$('#mask-gate-confirmed')?.checked) return toast('请勾选「已核对掩膜与依据」后再执行加强或推测修复。');
+        if (!$('#risk-ack')?.checked) {
+          return toast(requestedMode === 'speculative'
+            ? '推测性补全须勾选风险提示已知悉。'
+            : '加强修复须勾选风险提示（文化边界 / 非历史定稿）已知悉。');
+        }
+        if (requestedMode === 'enhanced' && !$('#allow-enhanced')?.checked) return toast('加强修复须勾选「允许加强」。');
+      }
     }
     setBusy(true);
     try {
@@ -650,8 +669,11 @@
     $('#compare-range').disabled = mode !== 'compare';
     layoutComparison();
     const metrics = candidate.metrics || {};
+    const maskLabel = metrics.evaluated_mask === 'enhanced_work_mask'
+      ? '扩大工作掩膜（enhanced_work_mask）外'
+      : (metrics.evaluated_mask === 'original_mask' ? '原始掩膜（mask.png）外' : '掩膜外');
     $('#candidate-device').textContent = `${candidate.versions?.device || ''} · ${candidate.elapsed_seconds || 0}s`;
-    $('#candidate-metrics').textContent = `掩膜外最大差异 ${metrics.outside_max_difference ?? '-'} · 边界色差 ${metrics.boundary_color_gap ?? '-'} · ${candidate.speculative ? '推测性内容需单独复核' : (candidate.enhanced || state.job?.mode === 'enhanced') ? '加强修复·选区附近纹理补全·非历史定稿' : '工程指标不代表历史真实性'}`;
+    $('#candidate-metrics').textContent = `${maskLabel}最大差异 ${metrics.outside_max_difference ?? '-'} · 边界色差 ${metrics.boundary_color_gap ?? '-'} · ${candidate.speculative ? '推测性内容需单独复核' : (candidate.enhanced || state.job?.mode === 'enhanced') ? '加强修复·选区附近纹理补全·非历史定稿' : '工程指标不代表历史真实性'}`;
     $('[data-action="select-candidate"]').disabled = ACTIVE.includes(state.job?.status);
     $('[data-action="select-candidate"]').textContent = jobSelected(candidate.id) ? '已选定候选' : '选定候选';
     $('[data-action="save-result"]').disabled = false;
